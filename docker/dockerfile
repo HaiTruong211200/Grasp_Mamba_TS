@@ -1,0 +1,68 @@
+
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
+
+ENV TZ=Europe/Vienna
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+RUN apt-get update --fix-missing && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository universe && \
+    apt-get update && \
+    apt-get install -y libgtk2.0-dev \
+    wget bzip2 ca-certificates curl git vim tmux g++ gcc build-essential cmake checkinstall gfortran libjpeg8-dev libtiff5-dev pkg-config yasm libavcodec-dev libavformat-dev libswscale-dev libxine2-dev libv4l-dev qtbase5-dev libgtk2.0-dev libtbb-dev libatlas-base-dev libfaac-dev libmp3lame-dev libtheora-dev libvorbis-dev libxvidcore-dev libopencore-amrnb-dev libopencore-amrwb-dev x264 v4l-utils libprotobuf-dev protobuf-compiler libgoogle-glog-dev libgflags-dev libgphoto2-dev libhdf5-dev doxygen libflann-dev libboost-all-dev proj-data libproj-dev libyaml-cpp-dev cmake-curses-gui && \
+    apt-get install -y libdc1394-dev
+
+
+RUN cd / &&\
+    git clone https://github.com/opencv/opencv &&\
+    cd opencv &&\
+    git checkout 3.4.15 &&\
+    cd / && git clone https://github.com/opencv/opencv_contrib.git &&\
+    cd opencv_contrib &&\
+    git checkout 3.4.15 &&\
+    cd /opencv &&\
+    mkdir build
+
+RUN cd /opencv/build &&\
+    cmake .. -D CMAKE_BUILD_TYPE=Release -D BUILD_CUDA_STUBS=OFF -D BUILD_DOCS=OFF -D WITH_MATLAB=OFF -D opencv_dnn_BUILD_TORCH_IMPORTE=OFF -D CUDA_FAST_MATH=ON  -D MKL_WITH_OPENMP=ON -D OPENCV_ENABLE_NONFREE=ON -D WITH_OPENMP=ON -D WITH_QT=ON -WITH_OPENEXR=ON -D ENABLE_PRECOMPILED_HEADERS=OFF -D BUILD_opencv_cudacodec=OFF -D INSTALL_PYTHON_EXAMPLES=OFF  -D WITH_TIFF=OFF -D WITH_WEBP=OFF -D OPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules -D CMAKE_CXX_FLAGS=-std=c++11 -D ENABLE_CXX11=OFF  -D BUILD_opencv_xfeatures2d=ON -D OPENCV_DNN_OPENCL=OFF -D WITH_CUDA=ON -D WITH_OPENCL=OFF &&\
+    make -j$(nproc) &&\
+    make install &&\
+    cd /opencv/build && make install
+
+RUN apt install -y libzmq3-dev freeglut3-dev
+
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-dev
+
+# Installing Python packages directly using pip
+RUN  pip3 install torch==2.1.1+cu118 torchvision==0.16.1+cu118 torchaudio==2.1.1 --extra-index-url https://download.pytorch.org/whl/cu118 &&\
+     pip3 install "git+https://github.com/facebookresearch/pytorch3d.git@stable" &&\
+     pip3 install trimesh joblib scikit-learn pyyaml opencv-python transformations warp-lang imageio tqdm open3d ruamel.yaml kornia pyrender scipy
+
+
+ENV CUDA_HOME /usr/local/cuda
+ENV LD_LIBRARY_PATH /usr/local/cuda/lib64
+
+ENV OPENCV_IO_ENABLE_OPENEXR=1
+
+#### Kaolin will change numpy version
+RUN pip3 install scikit-image meshcat webdataset omegaconf pypng roma seaborn opencv-contrib-python openpyxl wandb imgaug Ninja xlsxwriter timm albumentations xatlas rtree nodejs jupyterlab objaverse g4f ultralytics==8.0.120 pycocotools videoio numba 
+
+RUN pip3 install h5py
+
+RUN apt-get update --fix-missing && \
+    apt install -y rsync lbzip2 pigz zip p7zip-full p7zip-rar
+
+RUN apt-get install -y libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 
+RUN apt-get install -y libxcb-xkb-dev libxkbcommon-x11-0 libxcb-cursor-dev
+
+RUN pip install casadi
+RUN pip install "git+https://github.com/openai/CLIP.git"
+RUN pip install ttach kornia validators transformers tensorboardX
+# RUN pip3 install -U zetascale swarms
+RUN pip install --no-cache-dir causal-conv1d mamba-ssm timm==0.9.0 einops
+RUN pip install nltk triton
+
+
+
