@@ -135,21 +135,23 @@ class GraspMamba(nn.Module):
 
         # Text encoder
         self.clip_model, self.preprocess = clip.load("ViT-B/32", device=self.device)
+        # Freeze or fine-tuning
         self.clip_model.eval()
         for param in self.clip_model.parameters():
             param.requires_grad = False
         
-        self.model = AutoModel.from_pretrained("nvidia/MambaVision-S-1K", trust_remote_code=True)
-        # eval mode for inference
-        self.model.cuda().eval()
+        self.model = AutoModel.from_pretrained("nvidia/MambaVision-L2-1K", trust_remote_code=True)
+        # Freeze or fine-tuning
+        self.model.cuda().train()
+        # self.model.cuda().eval()
         # for param in self.model.parameters():
         #     param.requires_grad = True
 
         # Text-Image Fusion blocks
-        self.fusion_stage4 = TextImageFusionBlock(768, 512, 512)
-        self.fusion_stage3 = TextImageFusionBlock(384, 512, 384)
-        self.fusion_stage2 = TextImageFusionBlock(192, 512, 192)
-        self.fusion_stage1 = TextImageFusionBlock(96, 512, 96)
+        self.fusion_stage4 = TextImageFusionBlock(640, 512, 512)
+        self.fusion_stage3 = TextImageFusionBlock(320, 512, 384)
+        self.fusion_stage2 = TextImageFusionBlock(160, 512, 192)
+        self.fusion_stage1 = TextImageFusionBlock(80, 512, 96)
         
         # Upscale blocks
         self.upscale3 = UpscaleBlock(512, 384)
@@ -171,7 +173,10 @@ class GraspMamba(nn.Module):
         _, image_features = self.model(img)
         
         stage1, stage2, stage3, stage4 = image_features
-        
+        # print("stage1",stage1.shape)
+        # print("stage2",stage2.shape)
+        # print("stage3",stage3.shape)
+        # print("stage4",stage4.shape)
         # Multi-scale fusion and upsampling
         fused4 = self.fusion_stage4(stage4, text_features)
         

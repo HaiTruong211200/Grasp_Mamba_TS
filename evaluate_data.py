@@ -21,7 +21,7 @@ def parse_args():
 
     # Network
 
-    parser.add_argument('--network', type=str, default='graspmambav7', help='Network name in inference/models')
+    parser.add_argument('--network', type=str, default='graspmamba', help='Network name in inference/models')
     parser.add_argument('--input-size', type=int, default=224, help='Input image size for the network')
     parser.add_argument('--use-depth', type=int, default=0, help='Use Depth image for validation (1/0)')
     parser.add_argument('--use-rgb', type=int, default=1, help='Use RGB image for validation (1/0)')

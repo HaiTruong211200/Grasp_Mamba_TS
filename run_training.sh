@@ -10,7 +10,7 @@ DROPOUT_PROB=0.1
 CHANNEL_SIZE=32
 IOU_THRESHOLD=0.25
 DATASET="grasp-anything"
-DATASET_PATH="/home/cds-robotlab-10/master_thesis/grasp-anything/"
+DATASET_PATH="/home/eric-nguyen/AIT_projects/grasp-anything/"
 SPLIT=0.9
 DS_SHUFFLE=0
 DS_ROTATE=0.0
@@ -19,13 +19,14 @@ BATCH_SIZE=8
 EPOCHS=50
 BATCHES_PER_EPOCH=1000
 OPTIM="adam"
+LEARNING_RATE=0.0001
 DESCRIPTION=training_grasp_mamba
 LOGDIR="logs/"
 VIS=0
 FORCE_CPU=0
 RANDOM_SEED=123
 SEEN=1
-ADD_FILE_PATH="/home/cds-robotlab-10/master_thesis/grasp-anything/" #Specific for Grasp-Anywhere
+ADD_FILE_PATH="/home/eric-nguyen/AIT_projects/grasp-anything/" #Specific for Grasp-Anywhere
 
 # Construct the options string
 options=" \
@@ -46,6 +47,7 @@ options=" \
         --epochs ${EPOCHS} \
         --batches-per-epoch ${BATCHES_PER_EPOCH} \
         --optim ${OPTIM} \
+        --lr ${LEARNING_RATE} \
         --description ${DESCRIPTION} \
         --logdir ${LOGDIR} \
         --random-seed ${RANDOM_SEED} \

@@ -68,6 +68,8 @@ def parse_args():
                         help='Batches per Epoch')
     parser.add_argument('--optim', type=str, default='adam',
                         help='Optmizer for the training. (adam or SGD)')
+    parser.add_argument('--lr', type=float, default=0.0001,
+                        help='Learning rate')
 
     # Logging etc.
     parser.add_argument('--description', type=str, default='',
@@ -151,7 +153,7 @@ def validate(net, device, val_data, iou_threshold, visualize=False):
     return results
 
 
-def train(epoch, net, device, train_data, optimizer, batches_per_epoch, vis=True):
+def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vis=True,):
     """
     Run one training epoch
     :param epoch: Current epoch
@@ -206,7 +208,7 @@ def train(epoch, net, device, train_data, optimizer, batches_per_epoch, vis=True
             if epoch == 0 and batch_idx <= 500:  # Adjust 500 based on your dataset size
                 lr_scale = min(1., float(batch_idx) / 500)
                 for pg in optimizer.param_groups:
-                    pg['lr'] = lr_scale * 0.0001  # 0.0001 is your base lr
+                    pg['lr'] = lr_scale * args.lr  # 0.0001 is your base lr
             # Display the images
             if vis:
                 imgs = []
@@ -230,19 +232,20 @@ def train(epoch, net, device, train_data, optimizer, batches_per_epoch, vis=True
 def run():
     args = parse_args()
 
-    wandb.init(
-        # set the wandb project where this run will be logged
-        project="grasp-mamba-project-7",
-        # track hyperparameters and run metadata
-        config={
-        "learning_rate": 0.0001, # Adam default
-        "architecture": "GraspMamba",
-        "dataset": "Grasp-Anything",
-        "epochs": 50,
-        "weight_decay":1e-5, # default
-        "batch_size":8,
-        }
-    )
+    # wandb.init(
+    #     # set the wandb project where this run will be logged
+    #     project="grasp-mamba-L",
+    #     # track hyperparameters and run metadata
+    #     config={
+    #     "learning_rate": 0.0001, # Adam default
+    #     "architecture": "GraspMamba-SigLIP",
+    #     "dataset": "Grasp-Anything",
+    #     "epochs": 50,
+    #     "weight_decay":1e-5, # default
+    #     "batch_size":8,
+    #     }
+    # )
+
     # Set-up output directories
     dt = datetime.datetime.now().strftime('%y%m%d_%H%M')
     net_desc = '{}_{}'.format(dt, '_'.join(args.description.split()))
@@ -330,22 +333,16 @@ def run():
 
     # Load the network
     logging.info('Loading Network...')
-    input_channels = args.use_depth + 3 * args.use_rgb
     network = get_network(args.network)
-    net = network(
-        input_channels=input_channels,
-        dropout=args.use_dropout,
-        prob=args.dropout_prob,
-        channel_size=args.channel_size
-    )
+    net = network(input_size=args.input_size)
 
     net = net.to(device)
     logging.info('Done')
 
     if args.optim.lower() == 'adam':
-        optimizer = optim.Adam(net.parameters(),lr=0.0001)
+        optimizer = optim.Adam(net.parameters(),lr=args.lr)
     elif args.optim.lower() == 'sgd':
-        optimizer = optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
+        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9)
     else:
         raise NotImplementedError('Optimizer {} is not implemented'.format(args.optim))
 
@@ -358,7 +355,7 @@ def run():
     for epoch in range(args.epochs):
         print('Training Epoch {:02d}'.format(epoch))
         logging.info('Beginning Epoch {:02d}'.format(epoch))
-        train_results = train(epoch, net, device, train_data, optimizer, args.batches_per_epoch, vis=args.vis)
+        train_results = train(epoch, net, device, train_data, optimizer, args.batches_per_epoch, args=args, vis=args.vis)
 
         # Log training losses to tensorboard
         tb.add_scalar('loss/train_loss', train_results['loss'], epoch)
@@ -382,10 +379,10 @@ def run():
         for n, l in test_results['losses'].items():
             tb.add_scalar('val_loss/' + n, l, epoch)
         
-        # Log validation results to wandb
-        wandb.log({'epoch': epoch, 'IOU': test_results['correct'] / (test_results['correct'] + test_results['failed']), 'val_loss': test_results['loss']})
-        for n, l in test_results['losses'].items():
-            wandb.log({f'val_loss/{n}': l, 'epoch': epoch})
+        # # Log validation results to wandb
+        # wandb.log({'epoch': epoch, 'IOU': test_results['correct'] / (test_results['correct'] + test_results['failed']), 'val_loss': test_results['loss']})
+        # for n, l in test_results['losses'].items():
+        #     wandb.log({f'val_loss/{n}': l, 'epoch': epoch})
 
         # Save best performing network
         iou = test_results['correct'] / (test_results['correct'] + test_results['failed'])
@@ -396,8 +393,8 @@ def run():
             torch.save(net.state_dict(), os.path.join(save_folder, 'epoch_%02d_iou_%0.2f' % (epoch, iou)))
             best_iou = iou
     
-    # Finish the wandb run
-    wandb.finish()
+    # # Finish the wandb run
+    # wandb.finish()
 
 
 if __name__ == '__main__':

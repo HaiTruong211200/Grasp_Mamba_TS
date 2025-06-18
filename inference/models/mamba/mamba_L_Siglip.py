@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import clip
-from transformers import AutoModel
+from transformers import AutoModel, AutoProcessor
 import math
 
 
@@ -84,46 +84,10 @@ class GraspMamba(nn.Module):
     GraspMamba,
     """
 
-    def __init__(self,
-                 dim,
-                 in_dim,
-                 depths,
-                 window_size,
-                 mlp_ratio,
-                 num_heads,
-                 drop_path_rate=0.2,
-                 in_chans=3,
-                 num_classes=1000,
-                 qkv_bias=True,
-                 qk_scale=None,
-                 drop_rate=0.,
-                 attn_drop_rate=0.,
-                 layer_scale=None,
-                 layer_scale_conv=None,
-                 device=None,
-                 resolution=416,
-                 channel_size=32,
-                 output_channels=1,
-                 dropout=False,
-                 prob=0.1,
-                 **kwargs):
+    def __init__(self, resolution=416):
         """
         Args:
-            dim: feature size dimension.
-            depths: number of layers in each stage.
-            window_size: window size in each stage.
-            mlp_ratio: MLP ratio.
-            num_heads: number of heads in each stage.
-            drop_path_rate: drop path rate.
-            in_chans: number of input channels.
-            num_classes: number of classes.
-            qkv_bias: bool argument for query, key, value learnable bias.
-            qk_scale: bool argument to scaling query, key.
-            drop_rate: dropout rate.
-            attn_drop_rate: attention dropout rate.
-            norm_layer: normalization layer.
-            layer_scale: layer scaling coefficient.
-            layer_scale_conv: conv layer scaling coefficient.
+            resolution: input resolution.
         """
         super().__init__()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -133,27 +97,80 @@ class GraspMamba(nn.Module):
         self.new_spatial_dim = int(math.sqrt(self.num_query))
         assert self.new_spatial_dim ** 2 == self.num_query, "num_query must be a perfect square"
 
-        # Text encoder
-        self.clip_model, self.preprocess = clip.load("ViT-B/32", device=self.device)
-        self.clip_model.eval()
-        for param in self.clip_model.parameters():
+         # Replace CLIP text encoder with SigLIP text encoder
+        self.siglip_model = AutoModel.from_pretrained("google/siglip-base-patch16-224")
+        self.siglip_processor = AutoProcessor.from_pretrained("google/siglip-base-patch16-224")
+        self.siglip_model.to(self.device)
+        self.siglip_model.eval()
+        for param in self.siglip_model.parameters():
             param.requires_grad = False
         
-        self.model = AutoModel.from_pretrained("nvidia/MambaVision-S-1K", trust_remote_code=True)
-        # eval mode for inference
-        self.model.cuda().eval()
-      
+        self.model = AutoModel.from_pretrained("nvidia/MambaVision-L-1K", trust_remote_code=True)
+        # Freeze or fine-tuning
+        self.model.cuda().train()
+        # self.model.cuda().eval()
+        # for param in self.model.parameters():
+        #     param.requires_grad = True
+
+        # Text-Image Fusion blocks
+        self.fusion_stage4 = TextImageFusionBlock(1568, 768, 512)
+        self.fusion_stage3 = TextImageFusionBlock(784, 768, 384)
+        self.fusion_stage2 = TextImageFusionBlock(392, 768, 192)
+        self.fusion_stage1 = TextImageFusionBlock(196, 768, 96)
+        
+        # Upscale blocks
+        self.upscale3 = UpscaleBlock(512, 384)
+        self.upscale2 = UpscaleBlock(384, 192)
+        self.upscale1 = UpscaleBlock(192, 96)
+
+        # Combination layers
+        self.conv = nn.Conv2d(96, 1024, kernel_size=1)
+
         # Head and MLP
-        self.output = Head(in_channels=768, image_size=resolution)
+        self.output = Head(in_channels=1024, image_size=resolution)
         
 
     def forward(self, img, text):
-        # Mamba vision
+        # Encode text using CLIP
+        with torch.no_grad():
+            text_inputs = self.siglip_processor(
+                text=text,
+                padding="max_length",
+                truncation=True,
+                max_length=64,
+                return_tensors="pt"
+            )
+            text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
+            text_features = self.siglip_model.get_text_features(**text_inputs).float()
+        # print("text_features",text_features.shape)
+        # Mamba vision + text
         _, image_features = self.model(img)
         
-        x = image_features[-1]
+        stage1, stage2, stage3, stage4 = image_features
+        # print("stage1",stage1.shape)
+        # print("stage2",stage2.shape)
+        # print("stage3",stage3.shape)
+        # print("stage4",stage4.shape)
+        # Multi-scale fusion and upsampling
+        fused4 = self.fusion_stage4(stage4, text_features)
+        
+        up3 = self.upscale3(fused4)
+        fused3 = self.fusion_stage3(stage3, text_features)
+        combined3 = up3 + fused3
+        
+        up2 = self.upscale2(combined3)
+        fused2 = self.fusion_stage2(stage2, text_features)
+        combined2 = up2 + fused2
+        
+        up1 = self.upscale1(combined2)
+        fused1 = self.fusion_stage1(stage1, text_features)
+        combined1 = up1 + fused1
+        
+        # Final processing
+        final_features = F.relu(self.conv(combined1))
+
         # Grasp output
-        pos_output, cos_output, sin_output, width_output = self.output(x)
+        pos_output, cos_output, sin_output, width_output = self.output(final_features)
 
         return pos_output, cos_output, sin_output, width_output
 

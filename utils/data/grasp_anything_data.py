@@ -28,16 +28,16 @@ class GraspAnythingDataset(LanguageGraspDatasetBase):
         self.rgb_files = glob.glob(os.path.join(file_path, 'image', '*.jpg'))
         self.mask_files = glob.glob(os.path.join(file_path, 'mask', '*.npy'))
     
-        # if kwargs["seen"]:
-        #     with open(os.path.join('split/grasp-anything/seen.obj'), 'rb') as f:
-        #         idxs = pickle.load(f)
+        if kwargs["seen"]:
+            with open(os.path.join('split/grasp-anything/seen.obj'), 'rb') as f:
+                idxs = pickle.load(f)
 
-        #     self.grasp_files = list(filter(lambda x: x.split('/')[-1].split('.')[0] in idxs, self.grasp_files))
-        # else:
-        #     with open(os.path.join('split/grasp-anything/unseen.obj'), 'rb') as f:
-        #          idxs = pickle.load(f)
+            self.grasp_files = list(filter(lambda x: x.split('/')[-1].split('.')[0] in idxs, self.grasp_files))
+        else:
+            with open(os.path.join('split/grasp-anything/unseen.obj'), 'rb') as f:
+                 idxs = pickle.load(f)
 
-        #     self.grasp_files = list(filter(lambda x: x.split('/')[-1].split('.')[0] in idxs, self.grasp_files))
+            self.grasp_files = list(filter(lambda x: x.split('/')[-1].split('.')[0] in idxs, self.grasp_files))
 
 
         self.grasp_files.sort()
@@ -87,34 +87,6 @@ class GraspAnythingDataset(LanguageGraspDatasetBase):
         depth_img.resize((self.output_size, self.output_size))
         return depth_img.img
 
-    # def get_rgb(self, idx, rot=0, zoom=1.0, normalise=True):
-    #     mask_file = self.grasp_files[idx].replace("grasp_label_positive", "mask").replace(".pt", ".npy")
-    #     mask_img = mask.Mask.from_file(mask_file)
-    #     rgb_file = re.sub(r"_\d{1}\.pt", ".jpg", self.grasp_files[idx])
-    #     rgb_file = rgb_file.replace("grasp_label_positive", "image")
-    #     rgb_img = image.Image.from_file(rgb_file)
-    #     # rgb_img = image.Image.mask_out_image(rgb_img, mask_img)
-
-    #     # Jacquard try
-    #     rgb_img.rotate(rot)
-    #     rgb_img.zoom(zoom)
-    #     rgb_img.resize((self.output_size, self.output_size))
-    #     if normalise:
-    #         rgb_img.normalise()
-    #         rgb_img.img = rgb_img.img.transpose((2, 0, 1))
-    #     return rgb_img.img
-
-    #     # Cornell try
-    #     # center, left, top = self._get_crop_attrs(idx)
-    #     # rgb_img.rotate(rot, center)
-    #     # rgb_img.crop((top, left), (min(480, top + self.output_size), min(640, left + self.output_size)))
-    #     # rgb_img.zoom(zoom)
-    #     # rgb_img.resize((self.output_size, self.output_size))
-    #     # if normalise:
-    #     #     rgb_img.normalise()
-    #     #     rgb_img.img = rgb_img.img.transpose((2, 0, 1))
-    #     # return rgb_img.img
-
     def get_rgb(self, idx, rot=0, zoom=1.0, normalise=True):
         # Generate the corresponding .jpg file path
         rgb_file = re.sub(r"_\d+\.pt", ".jpg", self.grasp_files[idx])
@@ -137,18 +109,6 @@ class GraspAnythingDataset(LanguageGraspDatasetBase):
             rgb_img.normalise()
             rgb_img.img = rgb_img.img.transpose((2, 0, 1))
         return rgb_img.img
-    
-    
-    # def get_prompts(self, idx):
-    #     prompt_file, obj_id = self.grasp_files[idx].replace("grasp_label_positive", "scene_description").split('_')
-    #     prompt_file += '.pkl'
-    #     obj_id = int(obj_id.split('.')[0])
-
-    #     with open(prompt_file, 'rb') as f:
-    #         x = pickle.load(f)
-    #         prompt, queries = x
-
-    #     return prompt, queries[obj_id]
     
     def get_prompts(self, idx):
         # Adjusting the split operation to handle more than two values

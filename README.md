@@ -17,18 +17,21 @@ pip uninstall triton
 pip install triton
 ```
 
-## Datasets
-Our dataset can be accessed via [this link](https://airvlab.github.io/grasp-anything/docs/download/). 
+## Grasp-anything Datasets
+The dataset can be accessed via [this link](https://airvlab.github.io/grasp-anything/docs/download/). 
+
+## GraspMamba checkpoints
+We provide GraspMamba-L checkpoints via [this link](https://airvlab.github.io/grasp-anything/docs/download/). 
 
 ### Training model 
-Please modify the dataset path based on your setup in the [run_training.sh](/run_training.sh) file. 
+Please modify the dataset path based on your setup and other configurations in the [run_training.sh](/run_training.sh) file. Then:
 ```bash
 bash run_training.sh
 ```
 ### Evaluate model 
 
 ```bash
-python3 evaluate_test.py --dataset grasp-anything --dataset-path </your dataset path> --seen 1 --model-path </your model path> 
+python3 evaluate_test.py --dataset grasp-anything --dataset-path </your dataset path> --seen <1 or 0>  --model-path </your model path> 
 ```
 
 ## Testing
