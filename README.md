@@ -20,9 +20,6 @@ pip install triton
 ## Grasp-anything Datasets
 The dataset can be accessed via [this link](https://airvlab.github.io/grasp-anything/docs/download/). 
 
-## GraspMamba checkpoints
-We provide GraspMamba-L checkpoints via [this link](https://airvlab.github.io/grasp-anything/docs/download/). 
-
 ### Training model 
 Please modify the dataset path based on your setup and other configurations in the [run_training.sh](/run_training.sh) file. Then:
 ```bash
@@ -38,4 +35,17 @@ python3 evaluate_test.py --dataset grasp-anything --dataset-path </your dataset 
 For testing procedure, by comparing with other grasping methods, please follow the detailed instruction via [LGD](https://github.com/Fsoft-AIC/LGD). 
 
 ## Acknowledgement
-Our codebase is developed based on [LGD](https://github.com/Fsoft-AIC/LGD) and [MambaVision](https://github.com/NVlabs/MambaVision).
+Our codebase is developed based on [LGD](https://github.com/Fsoft-AIC/LGD) and [MambaVision](https://github.com/NVlabs/MambaVision). Please give us the motivation by citing our work:
+
+```bibtex
+@misc{nguyen2024graspmambamambabasedlanguagedrivengrasp,
+      title={GraspMamba: A Mamba-based Language-driven Grasp Detection Framework with Hierarchical Feature Learning}, 
+      author={Huy Hoang Nguyen and An Vuong and Anh Nguyen and Ian Reid and Minh Nhat Vu},
+      year={2024},
+      eprint={2409.14403},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2409.14403}, 
+}
+
+```
