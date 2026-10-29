@@ -1,4 +1,4 @@
-"""Evaluate every retained checkpoint on official ++ test seen and unseen splits.
+"""Evaluate up to five readable checkpoints on official ++ test seen and unseen splits.
 Checkpoints stay ordered by their saved validation score; test scores are never
 used to select or delete models. Reuses evaluate_test.validate (five grasps).
 """
@@ -7,6 +7,8 @@ import csv
 import gc
 import json
 import logging
+import pickle
+import zipfile
 from pathlib import Path
 import re
 import time
@@ -83,21 +85,95 @@ def write_results(report,output_dir):
     temporary.replace(path)
 
 
+def checkpoint_fingerprint(path):
+    info=Path(path).stat()
+    return {'size_bytes':info.st_size,'mtime_ns':info.st_mtime_ns}
+
+
+def checkpoint_read_error(error):
+    if isinstance(error,(OSError,EOFError,pickle.UnpicklingError,zipfile.BadZipFile)):
+        return True
+    if isinstance(error,RuntimeError):
+        message=str(error).lower()
+        return any(text in message for text in ('pytorchstreamreader','failed finding central directory',
+                   'unexpected eof','invalid magic number','not a zip archive','invalid header'))
+    return False
+
+
+def resume_results(report_path,checkpoints,protocol,settings):
+    if not report_path.is_file():
+        return {}
+    previous=json.loads(report_path.read_text(encoding='utf-8'))
+    if previous.get('protocol')!=protocol or previous.get('settings')!=settings:
+        raise ValueError('Cannot resume with changed evaluation protocol/settings; use the original settings or a new output directory')
+    candidates={str(item['path'].resolve()):item['path'] for item in checkpoints}
+    report_mtime=report_path.stat().st_mtime_ns
+    cached={}
+    for row in previous.get('results',[]):
+        key=str(Path(row['checkpoint']).resolve())
+        path=candidates.get(key)
+        if path is None or 'test_seen' not in row or 'test_unseen' not in row:
+            continue
+        try:
+            fingerprint=checkpoint_fingerprint(path)
+        except FileNotFoundError:
+            continue
+        recorded=row.get('checkpoint_fingerprint')
+        # Older reports lack a fingerprint: accept only files unchanged since that report.
+        if (recorded is not None and recorded!=fingerprint) or (recorded is None and fingerprint['mtime_ns']>report_mtime):
+            continue
+        cached[key]={**row,'checkpoint':str(path),'checkpoint_fingerprint':fingerprint}
+    return cached
+
+
 def evaluate_all(checkpoints,*,load_state,make_model,make_loaders,validate,device,
-                 iou_threshold,output_dir,settings,cleanup=lambda:None):
-    report={'metric':'grasp_accuracy','checkpoint_count':len(checkpoints),
-            'completed_count':0,'complete':False,
+                 iou_threshold,output_dir,settings,cleanup=lambda:None,
+                 max_checkpoints=5,resume=False):
+    if max_checkpoints<1:
+        raise ValueError('max_checkpoints must be positive')
+    target=min(max_checkpoints,len(checkpoints))
+    report={'metric':'grasp_accuracy','checkpoint_count':target,'candidate_count':len(checkpoints),
+            'completed_count':0,'complete':False,'finished':False,'errors':[],
             'checkpoint_order':'saved validation score descending; not test score',
             'protocol':{'no_grasps':5,'iou_threshold':iou_threshold,
                         'angle_threshold_degrees':30,'batch_size':1},
             'settings':settings,'results':[]}
+    report_path=Path(output_dir)/'checkpoint_results.json'
+    cached=resume_results(report_path,checkpoints,report['protocol'],settings) if resume else {}
+    order={str(item['path'].resolve()):index for index,item in enumerate(checkpoints)}
+    def update_report(finished=False):
+        # Keep all still-compatible previous rows available if interrupted again.
+        report['results']=sorted(cached.values(),key=lambda row:order[str(Path(row['checkpoint']).resolve())])[:target]
+        report['completed_count']=len(report['results'])
+        report['finished']=finished
+        report['complete']=finished and report['completed_count']==target
+        write_results(report,output_dir)
+    update_report()
     model=None
     model_mode=None
     loaders_by_mode={}
+    accepted=0
     for index,checkpoint in enumerate(checkpoints,1):
         path=checkpoint['path']
-        logging.info('[%d/%d] Testing %s',index,len(checkpoints),path.name)
-        state=load_state(path)
+        key=str(path.resolve())
+        if key in cached:
+            accepted+=1
+            logging.info('Reusing completed result: %s (%d/%d)',path.name,accepted,target)
+            if accepted>=target:
+                break
+            continue
+        logging.info('[candidate %d/%d; completed %d/%d] Testing %s',index,len(checkpoints),accepted,target,path.name)
+        try:
+            fingerprint=checkpoint_fingerprint(path)
+            state=load_state(path)
+        except Exception as error:
+            if not checkpoint_read_error(error):
+                raise
+            report['errors'].append({'checkpoint':str(path),'stage':'load',
+                                     'error_type':type(error).__name__,'message':str(error)})
+            logging.warning('Skipping unreadable checkpoint %s: %s',path.name,error)
+            update_report()
+            continue
         segmentation=any(key.startswith('grasp_mamba.seg_head.') for key in state)
         if model is None or model_mode!=segmentation:
             model=None
@@ -105,6 +181,7 @@ def evaluate_all(checkpoints,*,load_state,make_model,make_loaders,validate,devic
             cleanup()
             model=make_model(segmentation)
             model_mode=segmentation
+        # Architecture/programming errors are not treated as corrupt checkpoint files.
         model.load_state_dict(state,strict=True)
         del state
         if segmentation not in loaders_by_mode:
@@ -117,16 +194,23 @@ def evaluate_all(checkpoints,*,load_state,make_model,make_loaders,validate,devic
             if result['total']!=len(loader.dataset):
                 raise RuntimeError(f'{split}: evaluated {result["total"]}, expected {len(loader.dataset)}')
             scores[split]=result
-        s,u=scores['test_seen']['accuracy'],scores['test_unseen']['accuracy']
-        row={'checkpoint':str(path),'epoch':checkpoint['epoch'],
-             'validation_accuracy_from_filename':checkpoint['validation_accuracy'],
-             'segmentation':segmentation,**scores,'H':2*s*u/(s+u) if s+u else 0.}
-        report['results'].append(row)
-        report['completed_count']=index
-        report['complete']=index==len(checkpoints)
-        write_results(report,output_dir)
-        print(f'{path.name}: seen={100*s:.2f}% ({scores["test_seen"]["correct"]}/{scores["test_seen"]["total"]}), '
-              f'unseen={100*u:.2f}% ({scores["test_unseen"]["correct"]}/{scores["test_unseen"]["total"]}), H={100*row["H"]:.2f}%',flush=True)
+        seen,unseen=scores['test_seen']['accuracy'],scores['test_unseen']['accuracy']
+        cached[key]={'checkpoint':str(path),'epoch':checkpoint['epoch'],
+                     'checkpoint_fingerprint':fingerprint,
+                     'validation_accuracy_from_filename':checkpoint['validation_accuracy'],
+                     'segmentation':segmentation,**scores,
+                     'H':2*seen*unseen/(seen+unseen) if seen+unseen else 0.}
+        accepted+=1
+        update_report(finished=accepted>=target)
+        print(f'{path.name}: seen={100*seen:.2f}% ({scores["test_seen"]["correct"]}/{scores["test_seen"]["total"]}), '
+              f'unseen={100*unseen:.2f}% ({scores["test_unseen"]["correct"]}/{scores["test_unseen"]["total"]}), H={100*cached[key]["H"]:.2f}%',flush=True)
+        if accepted>=target:
+            break
+    update_report(finished=True)
+    if not report['results']:
+        raise RuntimeError(f'No checkpoint could be evaluated; read errors in {report_path}')
+    if not report['complete']:
+        logging.warning('Only %d/%d checkpoints evaluated; %d unreadable files recorded in JSON',report['completed_count'],target,len(report['errors']))
     return report
 
 
@@ -146,9 +230,11 @@ def parse_args():
     parser.add_argument('--num-workers',type=int,default=1)
     parser.add_argument('--iou-threshold',type=float,default=.25)
     parser.add_argument('--output-dir',type=Path)
+    parser.add_argument('--max-checkpoints',type=int,default=5,help='Maximum readable checkpoints to test, in validation-score order')
+    parser.add_argument('--resume',action='store_true',help='Reuse compatible completed rows in the same output directory')
     args=parser.parse_args()
-    if args.num_workers<0:
-        parser.error('--num-workers must be nonnegative')
+    if args.num_workers<0 or args.max_checkpoints<1:
+        parser.error('--num-workers must be nonnegative and --max-checkpoints positive')
     if args.logs_dir is not None:
         try:
             args.checkpoint_dir=find_latest_checkpoint_dir(args.logs_dir)
@@ -199,7 +285,7 @@ def main():
     report=evaluate_all(checkpoints,load_state=lambda path:torch.load(path,map_location='cpu',weights_only=True),
         make_model=make_model,make_loaders=make_loaders,validate=validate,device=device,
         iou_threshold=args.iou_threshold,output_dir=args.output_dir,settings=settings,
-        cleanup=torch.cuda.empty_cache)
+        cleanup=torch.cuda.empty_cache,max_checkpoints=args.max_checkpoints,resume=args.resume)
     print('\nCheckpoint                               Val acc%   Seen acc%  Unseen acc%     H%',flush=True)
     for row in report['results']:
         print(f'{Path(row["checkpoint"]).name:40s} {100*row["validation_accuracy_from_filename"]:8.2f} '

@@ -43,5 +43,25 @@ class TopCheckpointTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 saver.save({},2,float('nan'))
 
+    def test_keeps_ten_when_requested(self):
+        with tempfile.TemporaryDirectory() as folder:
+            saver=TopKCheckpoints(folder,k=10)
+            for epoch in range(12):
+                saver.save({'epoch':torch.tensor(epoch)},epoch,epoch/20)
+                self.assertLessEqual(len(list(Path(folder).glob('*.pt'))),10)
+            self.assertEqual([entry[1] for entry in saver.saved],list(range(11,1,-1)))
+    def test_training_cli_accepts_ten_and_rejects_zero(self):
+        import argparse,ast,io,sys
+        source=(Path(__file__).resolve().parents[1]/'train_network.py').read_text()
+        node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='parse_args')
+        namespace={'argparse':argparse}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'<parse_args>','exec'),namespace)
+        with patch.object(sys,'argv',['train_network.py','--max-checkpoints','10']):
+            self.assertEqual(namespace['parse_args']().max_checkpoints,10)
+        with patch.object(sys,'argv',['train_network.py','--max-checkpoints','0']),patch('sys.stderr',new=io.StringIO()):
+            with self.assertRaises(SystemExit):
+                namespace['parse_args']()
+
+
 if __name__=='__main__':
     unittest.main()

@@ -9,7 +9,7 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
-from evaluate_checkpoints import evaluate_all,find_checkpoints,find_latest_checkpoint_dir,parse_args,split_result
+from evaluate_checkpoints import evaluate_all,find_checkpoints,find_latest_checkpoint_dir,parse_args,split_result,checkpoint_read_error
 
 class CheckpointEvaluationTests(unittest.TestCase):
     def setUp(self):
@@ -113,6 +113,105 @@ class CheckpointEvaluationTests(unittest.TestCase):
         self.assertEqual(args.lambda_dice,0)
         with self.assertRaises(FileNotFoundError):
             find_checkpoints(self.directory)
+
+    def test_limits_legacy_folder_to_five_checkpoints(self):
+        calls,kwargs=self.callbacks()
+        with patch('sys.stdout',new=io.StringIO()):
+            report=evaluate_all(self.files(8),**kwargs)
+        self.assertEqual(report['candidate_count'],8)
+        self.assertEqual(report['checkpoint_count'],5)
+        self.assertEqual(calls['states'],[0,1,2,3,4])
+        self.assertEqual(len(calls['validate']),10)
+    def test_corrupt_archive_is_skipped_and_next_candidate_is_evaluated(self):
+        checkpoints=self.files(6)
+        calls,kwargs=self.callbacks()
+        original=kwargs['load_state']
+        def load(path):
+            if int(path.name.split('_')[1])==0:
+                raise RuntimeError('PytorchStreamReader failed reading zip archive: failed finding central directory')
+            return original(path)
+        kwargs['load_state']=load
+        with patch('sys.stdout',new=io.StringIO()):
+            report=evaluate_all(checkpoints,**kwargs)
+        self.assertTrue(report['complete'])
+        self.assertTrue(report['finished'])
+        self.assertEqual(calls['states'],[1,2,3,4,5])
+        self.assertEqual(len(report['errors']),1)
+        self.assertEqual(report['errors'][0]['stage'],'load')
+        self.assertTrue(all(item['path'].exists() for item in checkpoints))
+    def test_resume_reuses_four_completed_legacy_rows(self):
+        checkpoints=self.files(6)
+        _,kwargs=self.callbacks()
+        original=kwargs['load_state']
+        def fail(path):
+            if int(path.name.split('_')[1])==4:
+                raise RuntimeError('old run stopped here')
+            return original(path)
+        kwargs['load_state']=fail
+        with patch('sys.stdout',new=io.StringIO()),self.assertRaises(RuntimeError):
+            evaluate_all(checkpoints,**kwargs)
+        file=kwargs['output_dir']/'checkpoint_results.json'
+        old=json.loads(file.read_text())
+        self.assertEqual(old['completed_count'],4)
+        for row in old['results']:
+            row.pop('checkpoint_fingerprint',None)
+        file.write_text(json.dumps(old))
+        calls,kwargs=self.callbacks()
+        attempts=[]
+        original=kwargs['load_state']
+        def load(path):
+            epoch=int(path.name.split('_')[1])
+            attempts.append(epoch)
+            if epoch==4:
+                raise RuntimeError('PytorchStreamReader failed finding central directory')
+            return original(path)
+        kwargs['load_state']=load
+        with patch('sys.stdout',new=io.StringIO()):
+            report=evaluate_all(checkpoints,resume=True,**kwargs)
+        self.assertEqual(attempts,[4,5])
+        self.assertEqual(calls['states'],[5])
+        self.assertEqual(len(calls['validate']),2)
+        self.assertEqual([row['epoch'] for row in report['results']],[0,1,2,3,5])
+        self.assertTrue(report['complete'])
+    def test_not_enough_readable_files_is_explicitly_incomplete(self):
+        _,kwargs=self.callbacks()
+        original=kwargs['load_state']
+        def load(path):
+            if int(path.name.split('_')[1])==1:
+                raise EOFError('truncated')
+            return original(path)
+        kwargs['load_state']=load
+        with patch('sys.stdout',new=io.StringIO()):
+            report=evaluate_all(self.files(2),**kwargs)
+        self.assertFalse(report['complete'])
+        self.assertTrue(report['finished'])
+        self.assertEqual(report['completed_count'],1)
+    def test_memory_errors_are_not_mislabeled_as_corruption(self):
+        _,kwargs=self.callbacks()
+        kwargs['load_state']=lambda path: (_ for _ in ()).throw(RuntimeError('CUDA out of memory'))
+        with self.assertRaisesRegex(RuntimeError,'out of memory'):
+            evaluate_all(self.files(1),**kwargs)
+    def test_changed_resume_settings_are_rejected(self):
+        checkpoints=self.files(1)
+        _,kwargs=self.callbacks()
+        with patch('sys.stdout',new=io.StringIO()):
+            evaluate_all(checkpoints,**kwargs)
+        kwargs['settings']={'text_source':'instruction'}
+        with self.assertRaisesRegex(ValueError,'changed evaluation'):
+            evaluate_all(checkpoints,resume=True,**kwargs)
+    def test_real_truncated_torch_archive_is_recognized(self):
+        import torch
+        file=self.directory/'broken.pt'
+        torch.save({'weight':torch.ones(2)},file)
+        content=file.read_bytes()
+        file.write_bytes(content[:len(content)//2])
+        try:
+            torch.load(file,map_location='cpu',weights_only=True)
+        except Exception as error:
+            self.assertTrue(checkpoint_read_error(error),repr(error))
+        else:
+            self.fail('Truncated archive unexpectedly loaded')
+
 
 class LatestCheckpointFolderTests(unittest.TestCase):
     def test_uses_checkpoint_mtime_not_folder_name_or_other_logs(self):

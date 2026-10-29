@@ -176,3 +176,28 @@ Temporary checkpoints and folders with only logs are ignored. It prints the
 selected folder and reads its commandline_args.json as before. Without an
 explicit --output-dir, CSV/JSON go to evaluation_results/<selected-run-name>.
 An explicit --checkpoint-dir remains available to select a particular run.
+
+## Unreadable checkpoints and interrupted evaluation
+
+Bulk evaluation now tests up to five readable checkpoints by saved validation
+score (--max-checkpoints overrides). If a checkpoint cannot be deserialized
+because it is truncated/corrupt/missing, the script records its load error in
+JSON and attempts the next candidate. Model architecture, dataset, CUDA-memory
+and evaluation errors still propagate; they are not silently skipped. Original
+checkpoint files are never changed. Legacy folders may contain more than five
+models because retention applies to the active training run, not old files.
+
+Add --resume with the same settings/output directory to reuse completed rows.
+Resume verifies the evaluation protocol/settings and file size/mtime. For an
+older report without fingerprints, only files not modified since that report
+are reused. Validation rank remains the only selection criterion. JSON records
+candidate_count, checkpoint_count, completed_count, errors, finished and complete.
+If load errors prevent reaching the selected target, results are explicitly incomplete;
+an all-failed run reports an error after writing its load-error report.
+
+## Configure checkpoint counts
+
+`bash run_training.v1.sh ... --max-checkpoints 10` retains the ten best
+validation checkpoints produced by that training run. Default is five.
+`evaluate_checkpoints.py ... --max-checkpoints 10` evaluates up to ten readable
+checkpoints; this controls test count separately and does not delete model files.

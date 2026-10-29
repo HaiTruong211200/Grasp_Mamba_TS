@@ -97,7 +97,11 @@ def parse_args():
     parser.add_argument('--segmentation', action='store_true', help='Add part-mask auxiliary loss on grasp-anywhere')
     parser.add_argument('--lambda-seg', type=float, default=0.5)
     parser.add_argument('--lambda-dice', type=float, default=1.0)
+    parser.add_argument('--max-checkpoints', type=int, default=5,
+                        help='Keep this many highest-validation-IoU checkpoints per run')
     args = parser.parse_args()
+    if args.max_checkpoints < 1:
+        parser.error('--max-checkpoints must be positive')
     if args.segmentation and args.dataset != 'grasp-anywhere':
         parser.error('--segmentation requires --dataset grasp-anywhere and part_mask/')
     if args.text_source == 'instruction' and args.dataset != 'grasp-anywhere':
@@ -380,7 +384,7 @@ def run():
         optimizer, mode='max', factor=0.5, patience=5
     )
 
-    checkpoint_saver = TopKCheckpoints(save_folder, k=5)
+    checkpoint_saver = TopKCheckpoints(save_folder, k=args.max_checkpoints)
     for epoch in range(args.epochs):
         print('Training Epoch {:02d}'.format(epoch))
         logging.info('Beginning Epoch {:02d}'.format(epoch))
