@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import clip
+# import clip
 from transformers import AutoModel, AutoProcessor
 import math
 from inference.models.segmentation import SegHead
