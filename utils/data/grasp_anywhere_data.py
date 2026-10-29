@@ -4,6 +4,9 @@ import re
 
 import pickle
 import torch
+import numpy as np
+from PIL import Image as PILImage
+from skimage.transform import rotate, resize
 
 from utils.dataset_processing import grasp, image, mask
 from .language_grasp_data import LanguageGraspDatasetBase
@@ -14,7 +17,7 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
     Dataset wrapper for the Grasp-Anything dataset.
     """
 
-    def __init__(self, file_path, ds_rotate=0, text_source='object', **kwargs):
+    def __init__(self, file_path, ds_rotate=0, text_source='object', segmentation=False, **kwargs):
         """
         :param file_path: Grasp-Anything Dataset directory.
         :param ds_rotate: If splitting the dataset, rotate the list of items by this fraction first
@@ -23,6 +26,7 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         if text_source not in ('object', 'instruction'):
             raise ValueError('text_source must be object or instruction')
         self.text_source = text_source
+        self.segmentation = segmentation
         super(GraspAnywhereDataset, self).__init__(**kwargs)
 
         addition_file_path = kwargs["add_file_path"]
@@ -31,6 +35,9 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         self.prompt_files = glob.glob(os.path.join(file_path, 'scene_description', '*.pkl'))
         self.prompt_dir = os.path.join(file_path, 'scene_description')
         self.instruction_dir = os.path.join(addition_file_path, 'grasp_instructions')
+        self.part_mask_dir = os.path.join(addition_file_path, 'part_mask')
+        if self.segmentation and not os.path.isdir(self.part_mask_dir):
+            raise FileNotFoundError(f'Segmentation needs part_mask/: {self.part_mask_dir}')
         self.rgb_files = glob.glob(os.path.join(file_path, 'image', '*.jpg'))
         self.rgb_dir = os.path.join(file_path, 'image')
         self.mask_files = glob.glob(os.path.join(file_path, 'mask', '*.npy'))
@@ -147,3 +154,35 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         
 
         return prompt, queries[obj_id]
+    def get_target_mask(self, idx, rot=0.0, zoom=1.0):
+        """Apply original RGB geometry to the part mask, with nearest interpolation."""
+        stem = os.path.splitext(os.path.basename(self.grasp_files[idx]))[0]
+        path = os.path.join(self.part_mask_dir, stem + '.npy')
+        target = np.load(path, allow_pickle=False)
+        if target.ndim != 2 or not np.isfinite(target).all() or not np.isin(target, [0, 1]).all():
+            raise ValueError(f'Part mask must be a finite binary 2D array: {path}')
+        if not target.any():
+            raise ValueError(f'Part mask is empty before augmentation: {path}')
+        scene = stem.rsplit('_', 2)[0]
+        with PILImage.open(os.path.join(self.rgb_dir, scene + '.jpg')) as rgb:
+            if target.shape != (rgb.height, rgb.width):
+                raise ValueError(f'Part mask and RGB dimensions differ: {path}')
+        target = rotate(target.astype(np.float32), rot / np.pi * 180,
+                        order=0, mode='symmetric', preserve_range=True)
+        original_shape = target.shape
+        sr = int(target.shape[0] * (1 - zoom)) // 2
+        sc = int(target.shape[1] * (1 - zoom)) // 2
+        target = target[sr:target.shape[0] - sr, sc:target.shape[1] - sc]
+        target = resize(target, original_shape, order=0, mode='symmetric',
+                        anti_aliasing=False, preserve_range=True)
+        target = resize(target, (self.output_size, self.output_size), order=0,
+                        anti_aliasing=False, preserve_range=True)
+        # A crop may move the target out of view; this is a valid background target.
+        return self.numpy_to_torch((target >= 0.5).astype(np.float32))
+
+    def __getitem__(self, idx):
+        sample = super().__getitem__(idx)
+        if not getattr(self, 'segmentation', False):
+            return sample
+        target = self.get_target_mask(idx, rot=sample[3], zoom=sample[4])
+        return (*sample, target)

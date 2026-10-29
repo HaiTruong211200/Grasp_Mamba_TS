@@ -16,6 +16,7 @@ from hardware.device import get_device
 from inference.models import get_network
 from inference.post_process import post_process_output
 from utils.data import get_dataset
+from utils.checkpoints import TopKCheckpoints
 from utils.dataset_processing import evaluation
 from utils.visualisation.gridshow import gridshow
 import wandb
@@ -93,7 +94,12 @@ def parse_args():
     
     parser.add_argument('--text-source', choices=['object', 'instruction'], default='object',
                         help='grasp-anywhere text: original object query or detailed part instruction')
+    parser.add_argument('--segmentation', action='store_true', help='Add part-mask auxiliary loss on grasp-anywhere')
+    parser.add_argument('--lambda-seg', type=float, default=0.5)
+    parser.add_argument('--lambda-dice', type=float, default=1.0)
     args = parser.parse_args()
+    if args.segmentation and args.dataset != 'grasp-anywhere':
+        parser.error('--segmentation requires --dataset grasp-anywhere and part_mask/')
     if args.text_source == 'instruction' and args.dataset != 'grasp-anywhere':
         parser.error('--text-source instruction requires --dataset grasp-anywhere')
     return args
@@ -122,10 +128,12 @@ def validate(net, device, val_data, iou_threshold, visualize=False):
     ld = len(val_data)
 
     with torch.no_grad():
-        for x, y, didx, rot, zoom_factor, prompt, query in val_data:
+        for batch in val_data:
+            x, y, didx, rot, zoom_factor, prompt, query = batch[:7]
             xc = x.to(device)
             yc = [yy.to(device) for yy in y]
-            lossd = net.compute_loss(xc, yc, query)
+            mask_options = {'target_mask': batch[7].to(device)} if len(batch) == 8 else {}
+            lossd = net.compute_loss(xc, yc, query, **mask_options)
 
             loss = lossd['loss']
 
@@ -186,14 +194,16 @@ def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vi
     batch_idx = 0
     # Use batches per epoch to make training on different sized datasets (cornell/jacquard) more equivalent.
     while batch_idx <= batches_per_epoch:
-        for x, y, _, _, _, prompt, query in train_data:
+        for batch in train_data:
+            x, y, _, _, _, prompt, query = batch[:7]
             batch_idx += 1
             if batch_idx >= batches_per_epoch:
                 break
 
             xc = x.to(device)
             yc = [yy.to(device) for yy in y]
-            lossd = net.compute_loss(xc, yc, query)
+            mask_options = {'target_mask': batch[7].to(device)} if len(batch) == 8 else {}
+            lossd = net.compute_loss(xc, yc, query, **mask_options)
 
             loss = lossd['loss']
 
@@ -227,8 +237,8 @@ def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vi
                 n_img = min(4, x.shape[0])
                 for idx in range(n_img):
                     imgs.extend([x[idx,].numpy().squeeze()] + [yi[idx,].numpy().squeeze() for yi in y] + [
-                        x[idx,].numpy().squeeze()] + [pc[idx,].detach().cpu().numpy().squeeze() for pc in
-                                                      lossd['pred'].values()])
+                        x[idx,].numpy().squeeze()] + [pc[idx,].detach().cpu().numpy().squeeze() for key, pc in
+                                                      lossd['pred'].items() if key != 'mask_logits'])
                 gridshow('Display', imgs,
                          [(xc.min().item(), xc.max().item()), (0.0, 1.0), (0.0, 1.0), (-1.0, 1.0),
                           (0.0, 1.0)] * 2 * n_img,
@@ -303,7 +313,7 @@ def run():
     # Load Dataset
     logging.info('Loading {} Dataset...'.format(args.dataset.title()))
     Dataset = get_dataset(args.dataset)
-    text_options = {'text_source': args.text_source} if args.dataset == 'grasp-anywhere' else {}
+    text_options = {'text_source': args.text_source, 'segmentation': args.segmentation} if args.dataset == 'grasp-anywhere' else {}
     logging.info('Text source: %s', args.text_source)
     dataset = Dataset(args.dataset_path,
                       output_size=args.input_size,
@@ -351,7 +361,9 @@ def run():
     logging.info('Loading Network...')
     network = get_network(args.network)
     net = network(input_size=args.input_size,
-                  vision_model=args.vision_model, text_model=args.text_model)
+                  vision_model=args.vision_model, text_model=args.text_model,
+                  segmentation=args.segmentation, lambda_seg=args.lambda_seg,
+                  lambda_dice=args.lambda_dice)
 
     net = net.to(device)
     logging.info('Done')
@@ -365,10 +377,10 @@ def run():
 
    # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=5, verbose=True
+        optimizer, mode='max', factor=0.5, patience=5
     )
 
-    best_iou = 0.0
+    checkpoint_saver = TopKCheckpoints(save_folder, k=5)
     for epoch in range(args.epochs):
         print('Training Epoch {:02d}'.format(epoch))
         logging.info('Beginning Epoch {:02d}'.format(epoch))
@@ -406,9 +418,7 @@ def run():
 
         # Update learning rate
         scheduler.step(iou)
-        if iou > best_iou or epoch == 0 or (epoch % 10) == 0:
-            torch.save(net.state_dict(), os.path.join(save_folder, 'epoch_%02d_iou_%0.2f' % (epoch, iou)))
-            best_iou = iou
+        checkpoint_saver.save(net.state_dict(), epoch, iou)
     
     # # Finish the wandb run
     # wandb.finish()

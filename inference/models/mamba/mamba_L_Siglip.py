@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import clip
 from transformers import AutoModel, AutoProcessor
 import math
+from inference.models.segmentation import SegHead
 
 
 class TextImageFusionBlock(nn.Module):
@@ -85,7 +86,7 @@ class GraspMamba(nn.Module):
     """
 
     def __init__(self, resolution=416, vision_model="nvidia/MambaVision-L-1K",
-                 text_model="google/siglip-base-patch16-224"):
+                 text_model="google/siglip-base-patch16-224", segmentation=False):
         """
         Args:
             resolution: input resolution.
@@ -129,9 +130,16 @@ class GraspMamba(nn.Module):
 
         # Head and MLP
         self.output = Head(in_channels=1024, image_size=resolution)
+        self.seg_head = None
+        if segmentation:
+            # Do not advance the CPU RNG used by baseline initialization/sampling.
+            with torch.random.fork_rng(devices=[]):
+                self.seg_head = SegHead(96)
         
 
-    def forward(self, img, text):
+    def forward(self, img, text, return_seg=False):
+        if return_seg and self.seg_head is None:
+            raise ValueError('Construct with segmentation=True to request mask logits')
         # Encode text using CLIP
         with torch.no_grad():
             text_inputs = self.siglip_processor(
@@ -173,6 +181,9 @@ class GraspMamba(nn.Module):
         # Grasp output
         pos_output, cos_output, sin_output, width_output = self.output(final_features)
 
+        if return_seg:
+            return (pos_output, cos_output, sin_output, width_output,
+                    self.seg_head(combined1, img.shape[-2:]))
         return pos_output, cos_output, sin_output, width_output
 
   

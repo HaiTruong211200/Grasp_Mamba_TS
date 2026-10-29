@@ -98,7 +98,7 @@ class TextSourceTests(unittest.TestCase):
             run=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run')
             assignments=[n for n in run.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('text_options','dataset') for t in n.targets)]
             for dataset in ('grasp-anywhere','grasp-anything'):
-                args=types.SimpleNamespace(dataset=dataset,text_source='instruction' if dataset=='grasp-anywhere' else 'object',dataset_path='base',add_file_path='plus',input_size=224,ds_rotate=0,use_depth=False,use_rgb=True,seen=1)
+                args=types.SimpleNamespace(dataset=dataset,segmentation=False,text_source='instruction' if dataset=='grasp-anywhere' else 'object',dataset_path='base',add_file_path='plus',input_size=224,ds_rotate=0,use_depth=False,use_rgb=True,seen=1)
                 constructor=MagicMock()
                 exec(compile(ast.Module(body=assignments,type_ignores=[]),name,'exec'),{'args':args,'Dataset':constructor})
                 kwargs=constructor.call_args.kwargs

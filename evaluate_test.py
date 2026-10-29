@@ -19,6 +19,8 @@ def parse_args():
 
     # Network
     parser.add_argument('--network', type=str, default='graspmamba', help='Network name in inference/models')
+    parser.add_argument('--vision-model', default='nvidia/MambaVision-L-1K')
+    parser.add_argument('--text-model', default='google/siglip-base-patch16-224')
     parser.add_argument('--input-size', type=int, default=224, help='Input image size for the network')
     parser.add_argument('--use-depth', type=int, default=0, help='Use Depth image for validation (1/0)')
     parser.add_argument('--use-rgb', type=int, default=1, help='Use RGB image for validation (1/0)')
@@ -36,7 +38,12 @@ def parse_args():
                         help='Force code to run in CPU mode')
     parser.add_argument('--text-source', choices=['object', 'instruction'], default='object',
                         help='grasp-anywhere text: original object query or detailed part instruction')
+    parser.add_argument('--segmentation', action='store_true', help='Add part-mask auxiliary loss on grasp-anywhere')
+    parser.add_argument('--lambda-seg', type=float, default=0.5)
+    parser.add_argument('--lambda-dice', type=float, default=1.0)
     args = parser.parse_args()
+    if args.segmentation and args.dataset != 'grasp-anywhere':
+        parser.error('--segmentation requires --dataset grasp-anywhere and part_mask/')
     if args.text_source == 'instruction' and args.dataset != 'grasp-anywhere':
         parser.error('--text-source instruction requires --dataset grasp-anywhere')
     return args
@@ -55,10 +62,12 @@ def validate(net, device, val_data, iou_threshold, plot=False):
         count = 0
     start_time = time.time()
     with torch.no_grad():
-        for x, y, didx, rot, zoom_factor, prompt, query in tqdm(val_data):
+        for batch in tqdm(val_data):
+            x, y, didx, rot, zoom_factor, prompt, query = batch[:7]
             xc = x.to(device)
             yc = [yy.to(device) for yy in y]
-            lossd = net.compute_loss(xc, yc, query)
+            mask_options = {'target_mask': batch[7].to(device)} if len(batch) == 8 else {}
+            lossd = net.compute_loss(xc, yc, query, **mask_options)
 
             loss = lossd['loss']
 
@@ -109,7 +118,7 @@ def run():
     # Load Dataset
     logging.info('Loading {} Dataset...'.format(args.dataset.title()))
     Dataset = get_dataset(args.dataset)
-    text_options = {'text_source': args.text_source} if args.dataset == 'grasp-anywhere' else {}
+    text_options = {'text_source': args.text_source, 'segmentation': args.segmentation} if args.dataset == 'grasp-anywhere' else {}
     logging.info('Text source: %s', args.text_source)
     dataset = Dataset(args.dataset_path,
                       output_size=args.input_size,
@@ -135,12 +144,10 @@ def run():
     logging.info('Loading Network...')
     input_channels = args.use_depth + 3 * args.use_rgb
     network = get_network(args.network)
-    net = network(
-        input_channels=input_channels,
-        dropout=False,
-        prob=0,
-        channel_size=32
-    )
+    net = network(input_size=args.input_size,
+                  vision_model=args.vision_model, text_model=args.text_model,
+                  segmentation=args.segmentation, lambda_seg=args.lambda_seg,
+                  lambda_dice=args.lambda_dice)
     net.load_state_dict(torch.load(args.model_path))
     net = net.to(device)
     # Add this line to display the number of parameters

@@ -33,7 +33,7 @@ Run this original loader on Linux with the expected dataset filenames.
 Model forward/fusion/upsampling, text mode, original compute_loss, train loop,
 warmup ordering, evaluation/IoU, post-processing and scheduler are unchanged.
 Original CUDA assumptions and runtime/version issues (including original W&B
-calls and scheduler arguments) remain. Changing pretrained paths is intended
+calls) remain. Changing pretrained paths is intended
 for the same MambaVision-L and SigLIP architecture, not different variants.
 
 The earlier versions are backed up in `.baseline_restore_backup/`. Dataset
@@ -64,3 +64,52 @@ only; unrelated original evaluation/runtime limitations remain.
 bash run_training.v1.sh --dataset grasp-anywhere --dataset-path data/grasp-anything --add-file-path data/grasp-anything-pp --text-source object --description baseline_object
 bash run_training.v1.sh --dataset grasp-anywhere --dataset-path data/grasp-anything --add-file-path data/grasp-anything-pp --text-source instruction --description baseline_instruction
 ```
+
+## PyTorch scheduler compatibility
+
+Removed only `verbose=True` from ReduceLROnPlateau because the current runtime
+rejects that keyword. Its mode=max, factor=0.5, patience=5 and scheduler.step(iou)
+remain unchanged; this does not change the LR reduction rule.
+
+## Optional segmentation on the same original ++ loader
+
+Both baseline and segmentation now use `--dataset grasp-anywhere` and the same
+folder paths. Do not use the older grasp-anything-language manifest trainer.
+Add `--segmentation --lambda-seg 0.5 --lambda-dice 1` to the existing v1 command.
+Use `--lambda-dice 0` for BCE-only auxiliary supervision. `--text-source` remains
+object/instruction; keep it identical in both runs.
+
+The additional mask is `<add-file-path>/part_mask/<scene>_<object>_<part>.npy`,
+a finite binary 2D array matching the source RGB size. Original seven batch
+fields are unchanged; segmentation appends an eighth mask tensor. Mask rotation,
+central zoom crop and resizing reuse the sampled RGB augmentation parameters,
+with nearest interpolation. A target cropped completely out of view becomes
+background for that augmented sample; missing/invalid source masks raise errors.
+No sample filtering or alternate split is introduced.
+
+The original grasp loss is unchanged. With the flag enabled:
+`total = grasp_MSE + lambda_seg * (BCE + lambda_dice * Dice)`.
+The optional head reads the final fused 96-channel feature; masks never enter
+the grasp forward path. Default inference returns four grasp maps. Additional
+head initialization preserves CPU RNG state. Baseline does not read masks or
+instantiate the head. Original loop bounds, warmup, augmentation, text mode,
+upsampling and 15-grasp/width-150 IoU validation remain intact.
+
+`evaluate_test.py` accepts the same segmentation and text flags for the matching
+checkpoint. Its constructor now uses the actual Grasp_Mamba signature rather
+than unsupported old GR-ConvNet arguments; IoU logic is unchanged. Load a
+segmentation checkpoint with --segmentation, or omit it for a baseline checkpoint.
+The standalone old manifest/evaluate_manifest experiment is not this pipeline.
+
+This integration was tested with small CPU encoders/data, not a full pretrained
+Kaggle CUDA training run. Original unrelated runtime/version issues remain.
+
+## Checkpoint retention
+
+Each training run retains up to five state_dict checkpoints with the highest
+validation IoU, ranked using the full-precision score. It considers every epoch;
+when full, a score no better than the fifth-best is not saved. Ties keep the
+earlier epoch. Replaced checkpoints from this run are removed after a successful
+new save. A failed write preserves the previous checkpoints. Filenames contain
+the epoch and IoU and use .pt; checkpoint contents remain plain state_dict.
+Scheduler, validation and training calculations are unchanged.
