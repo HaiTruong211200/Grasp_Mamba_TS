@@ -396,9 +396,9 @@ def run():
             tb.add_scalar('train_loss/' + n, l, epoch)
             
         # Log training losses to wandb
-        wandb.log({'epoch': epoch, 'train_loss': train_results['loss']})
-        for n, l in train_results['losses'].items():
-            wandb.log({f'train_loss/{n}': l, 'epoch': epoch})
+        # wandb.log({'epoch': epoch, 'train_loss': train_results['loss']})
+        # for n, l in train_results['losses'].items():
+        #     wandb.log({f'train_loss/{n}': l, 'epoch': epoch})
         
         # Run Validation
         logging.info('Validating...')
