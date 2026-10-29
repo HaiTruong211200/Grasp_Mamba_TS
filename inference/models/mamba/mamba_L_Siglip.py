@@ -3,9 +3,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import clip
 from transformers import AutoModel, AutoProcessor
 import math
+from inference.models.segmentation import SegHead
 
 
 class TextImageFusionBlock(nn.Module):
@@ -84,7 +84,7 @@ class GraspMamba(nn.Module):
     GraspMamba,
     """
 
-    def __init__(self, resolution=416):
+    def __init__(self, resolution=416, segmentation=False):
         """
         Args:
             resolution: input resolution.
@@ -100,14 +100,13 @@ class GraspMamba(nn.Module):
          # Replace CLIP text encoder with SigLIP text encoder
         self.siglip_model = AutoModel.from_pretrained("google/siglip-base-patch16-224")
         self.siglip_processor = AutoProcessor.from_pretrained("google/siglip-base-patch16-224")
-        self.siglip_model.to(self.device)
         self.siglip_model.eval()
         for param in self.siglip_model.parameters():
             param.requires_grad = False
         
         self.model = AutoModel.from_pretrained("nvidia/MambaVision-L-1K", trust_remote_code=True)
         # Freeze or fine-tuning
-        self.model.cuda().train()
+        self.model.train()
         # self.model.cuda().eval()
         # for param in self.model.parameters():
         #     param.requires_grad = True
@@ -128,9 +127,17 @@ class GraspMamba(nn.Module):
 
         # Head and MLP
         self.output = Head(in_channels=1024, image_size=resolution)
+        self.seg_head = SegHead(96) if segmentation else None
         
 
-    def forward(self, img, text):
+    def train(self, mode=True):
+        super().train(mode)
+        self.siglip_model.eval()
+        return self
+
+    def forward(self, img, text, return_seg=False):
+        if return_seg and self.seg_head is None:
+            raise ValueError('Segmentation head is disabled; construct with segmentation=True')
         # Encode text using CLIP
         with torch.no_grad():
             text_inputs = self.siglip_processor(
@@ -140,7 +147,7 @@ class GraspMamba(nn.Module):
                 max_length=64,
                 return_tensors="pt"
             )
-            text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
+            text_inputs = {k: v.to(img.device) for k, v in text_inputs.items()}
             text_features = self.siglip_model.get_text_features(**text_inputs).float()
         # print("text_features",text_features.shape)
         # Mamba vision + text
@@ -154,15 +161,15 @@ class GraspMamba(nn.Module):
         # Multi-scale fusion and upsampling
         fused4 = self.fusion_stage4(stage4, text_features)
         
-        up3 = self.upscale3(fused4)
+        up3 = F.interpolate(self.upscale3.conv(fused4), size=stage3.shape[-2:], mode='bilinear', align_corners=False)
         fused3 = self.fusion_stage3(stage3, text_features)
         combined3 = up3 + fused3
         
-        up2 = self.upscale2(combined3)
+        up2 = F.interpolate(self.upscale2.conv(combined3), size=stage2.shape[-2:], mode='bilinear', align_corners=False)
         fused2 = self.fusion_stage2(stage2, text_features)
         combined2 = up2 + fused2
         
-        up1 = self.upscale1(combined2)
+        up1 = F.interpolate(self.upscale1.conv(combined2), size=stage1.shape[-2:], mode='bilinear', align_corners=False)
         fused1 = self.fusion_stage1(stage1, text_features)
         combined1 = up1 + fused1
         
@@ -172,7 +179,10 @@ class GraspMamba(nn.Module):
         # Grasp output
         pos_output, cos_output, sin_output, width_output = self.output(final_features)
 
-        return pos_output, cos_output, sin_output, width_output
+        outputs = (pos_output, cos_output, sin_output, width_output)
+        if return_seg:
+            return outputs + (self.seg_head(combined1, img.shape[-2:]),)
+        return outputs
 
   
         

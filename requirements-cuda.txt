@@ -1,0 +1,6 @@
+# Linux NVIDIA GPU only. Install AFTER torch and requirements-notebook.txt:
+# python -m pip install --no-build-isolation --no-deps -r requirements-cuda.txt
+# Match the repository's vendored mamba_ssm/__init__.py (__version__=2.2.2).
+# Wheels are specific to Python, torch, CUDA and C++ ABI; source build needs nvcc.
+causal-conv1d==1.4.0
+mamba-ssm==2.2.2

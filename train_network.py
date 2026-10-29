@@ -3,11 +3,15 @@ import datetime
 import json
 import logging
 import os
+import random
 import sys
 
 import cv2
 import numpy as np
-import tensorboardX
+try:
+    import tensorboardX
+except ModuleNotFoundError:
+    from torch.utils import tensorboard as tensorboardX
 import torch
 import torch.optim as optim
 import torch.utils.data
@@ -87,150 +91,152 @@ def parse_args():
     parser.add_argument('--add-file-path', type=str, default='data/grasp-anywhere',
                         help='Specific for Grasp-Anywhere')
     
+    parser.add_argument('--segmentation', action='store_true', help='Train auxiliary target segmentation')
+    parser.add_argument('--lambda-seg', type=float, default=0.5)
+    parser.add_argument('--lambda-dice', type=float, default=1.0)
+    parser.add_argument('--grasp-loss', choices=['mse', 'smooth_l1'], default='mse')
+    parser.add_argument('--mask-target', choices=['object', 'part', 'union'], default='object')
+    parser.add_argument('--normalization', choices=['legacy', 'imagenet'], default='legacy')
     args = parser.parse_args()
+    if args.segmentation and args.dataset != 'grasp-anything-language':
+        parser.error('--segmentation requires --dataset grasp-anything-language and a JSONL manifest')
+    if args.batches_per_epoch <= 0:
+        parser.error('--batches-per-epoch must be positive')
     return args
 
 
+def prepare_batch(batch, device):
+    if isinstance(batch, dict):
+        moved = dict(batch)
+        moved['image'] = batch['image'].to(device)
+        moved['grasp_targets'] = {k: v.to(device) for k, v in batch['grasp_targets'].items()}
+        if 'target_mask' in batch:
+            moved['target_mask'] = batch['target_mask'].to(device)
+        return moved
+    x, y, *rest = batch
+    return (x.to(device), [v.to(device) for v in y], rest[-1])
+
+
+def batch_loss(net, batch):
+    return net.compute_loss(batch) if isinstance(batch, dict) else net.compute_loss(*batch)
+
+
+def show_training_batch(batch, pred):
+    """Display grasp maps and optional target/predicted masks for one sample."""
+    if isinstance(batch, dict):
+        image = batch['image'][0].detach().cpu().numpy().transpose(1, 2, 0)
+    else:
+        image = batch[0][0].detach().cpu().numpy().transpose(1, 2, 0)
+    image = (image - image.min()) / max(float(image.max() - image.min()), 1e-6)
+    panels = [('Input', image), ('Grasp quality', pred['pos'][0, 0].detach().cpu().numpy())]
+    if 'mask_logits' in pred:
+        panels += [('Target mask', batch['target_mask'][0, 0].cpu().numpy()),
+                   ('Predicted mask', pred['mask_logits'][0, 0].detach().sigmoid().cpu().numpy())]
+    fig = plt.figure('Training')
+    fig.clear()
+    for i, (title, values) in enumerate(panels, 1):
+        ax = fig.add_subplot(1, len(panels), i)
+        ax.imshow(values.squeeze(), cmap='gray')
+        ax.set_title(title)
+        ax.axis('off')
+    plt.pause(0.001)
+
+
 def validate(net, device, val_data, iou_threshold, visualize=False):
-    """
-    Run validation.
-    :param net: Network
-    :param device: Torch device
-    :param val_data: Validation Dataset
-    :param iou_threshold: IoU threshold
-    :return: Successes, Failures and Losses
-    """
     net.eval()
-
-    results = {
-        'correct': 0,
-        'failed': 0,
-        'loss': 0,
-        'losses': {
-
-        }
-    }
-
-    ld = len(val_data)
-
+    results = {'correct': 0, 'failed': 0, 'loss': 0, 'losses': {}}
+    count = 0
     with torch.no_grad():
-        for x, y, didx, rot, zoom_factor, prompt, query in val_data:
-            xc = x.to(device)
-            yc = [yy.to(device) for yy in y]
-            lossd = net.compute_loss(xc, yc, query)
-
-            loss = lossd['loss']
-
-            results['loss'] += loss.item() / ld
-            for ln, l in lossd['losses'].items():
-                if ln not in results['losses']:
-                    results['losses'][ln] = 0
-                results['losses'][ln] += l.item() / ld
-
-            q_out, ang_out, w_out = post_process_output(lossd['pred']['pos'], lossd['pred']['cos'],
-                                                        lossd['pred']['sin'], lossd['pred']['width'])
-            
-            s = evaluation.calculate_iou_match(q_out,
-                                               ang_out,
-                                               val_data.dataset.get_gtbb(didx, rot, zoom_factor),
-                                               no_grasps=15,
-                                               grasp_width=w_out,
-                                               threshold=iou_threshold
-                                               )
-            if visualize:
-                # Visualize the predicted grasps and ground truth
-                if isinstance(rot, torch.Tensor):
-                    rot = rot.item()
-                rgb_img = val_data.dataset.get_rgb(didx, rot, zoom_factor, normalise=False)
-                evaluation.plot_output(plt.figure(), rgb_img, q_out, ang_out, val_data.dataset.get_gtbb(didx, rot, zoom_factor),
-                                                        query, prompt, no_grasps=5, grasp_width_img=w_out, save_folder='output_test')
-                
-            if s:
-                results['correct'] += 1
-            else:
-                results['failed'] += 1
-
+        for raw in val_data:
+            batch = prepare_batch(raw, device)
+            lossd = batch_loss(net, batch)
+            size = batch['image'].shape[0] if isinstance(batch, dict) else batch[0].shape[0]
+            count += size
+            results['loss'] += lossd['loss'].item() * size
+            for name, value in lossd['losses'].items():
+                results['losses'][name] = results['losses'].get(name, 0) + value.item() * size
+            for i in range(size):
+                pred = lossd['pred']
+                width_scale = batch['image'].shape[-1] / 2 if isinstance(batch, dict) else None
+                q, angle, width = post_process_output(
+                    *(pred[k][i:i+1] for k in ('pos', 'cos', 'sin', 'width')),
+                    width_scale=width_scale)
+                if isinstance(batch, dict):
+                    idx = batch['metadata'][i]['index']
+                    gt = val_data.dataset.get_gtbb(idx)
+                else:
+                    idx, rot, zoom = (raw[j][i].item() for j in (2, 3, 4))
+                    gt = val_data.dataset.get_gtbb(int(idx), rot, zoom)
+                success = evaluation.calculate_iou_match(
+                    q, angle, gt, no_grasps=1 if isinstance(batch, dict) else 15,
+                    grasp_width=width, threshold=iou_threshold)
+                results['correct' if success else 'failed'] += 1
+                if visualize:
+                    rgb = val_data.dataset.get_rgb(int(idx), normalise=False)
+                    query = batch['instruction'][i] if isinstance(batch, dict) else raw[-1][i]
+                    evaluation.plot_output(plt.figure(), rgb, q, angle, gt,
+                                           query, '', no_grasps=1, grasp_width_img=width)
+                if 'mask_logits' in pred:
+                    mask = pred['mask_logits'][i].sigmoid() >= 0.5
+                    target = batch['target_mask'][i].bool()
+                    intersection = (mask & target).sum().item()
+                    union = (mask | target).sum().item()
+                    denom = mask.sum().item() + target.sum().item()
+                    results['mask_iou'] = results.get('mask_iou', 0) + (intersection / union if union else 1)
+                    results['mask_dice'] = results.get('mask_dice', 0) + (2 * intersection / denom if denom else 1)
+    if count == 0:
+        raise ValueError('Validation loader is empty')
+    results['loss'] /= count
+    results['losses'] = {k: v / count for k, v in results['losses'].items()}
+    for key in ('mask_iou', 'mask_dice'):
+        if key in results:
+            results[key] /= count
     return results
 
 
-def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vis=True,):
-    """
-    Run one training epoch
-    :param epoch: Current epoch
-    :param net: Network
-    :param device: Torch device
-    :param train_data: Training Dataset
-    :param optimizer: Optimizer
-    :param batches_per_epoch:  Data batches to train on
-    :param vis:  Visualise training progress
-    :return:  Average Losses for Epoch
-    """
-    results = {
-        'loss': 0,
-        'losses': {
-        }
-    }
-
+def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vis=True):
+    if len(train_data) == 0 or batches_per_epoch <= 0:
+        raise ValueError('Training requires a nonempty loader and positive update count')
+    results = {'loss': 0, 'losses': {}}
     net.train()
-
-    batch_idx = 0
-    # Use batches per epoch to make training on different sized datasets (cornell/jacquard) more equivalent.
-    while batch_idx <= batches_per_epoch:
-        for x, y, _, _, _, prompt, query in train_data:
-            batch_idx += 1
-            if batch_idx >= batches_per_epoch:
-                break
-
-            xc = x.to(device)
-            yc = [yy.to(device) for yy in y]
-            lossd = net.compute_loss(xc, yc, query)
-
-            loss = lossd['loss']
-
-            if batch_idx % 100 == 0:
-                logging.info('Epoch: {}, Batch: {}, Loss: {:0.4f}'.format(epoch, batch_idx, loss.item()))
-
-            results['loss'] += loss.item()
-            for ln, l in lossd['losses'].items():
-                if ln not in results['losses']:
-                    results['losses'][ln] = 0
-                results['losses'][ln] += l.item()
-
-            optimizer.zero_grad()
-            loss.backward()
-
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-
-            optimizer.step()
-
-            # Learning rate warmup
-            if epoch == 0 and batch_idx <= 500:  # Adjust 500 based on your dataset size
-                lr_scale = min(1., float(batch_idx) / 500)
-                for pg in optimizer.param_groups:
-                    pg['lr'] = lr_scale * args.lr  # 0.0001 is your base lr
-            # Display the images
-            if vis:
-                imgs = []
-                n_img = min(4, x.shape[0])
-                for idx in range(n_img):
-                    imgs.extend([x[idx,].numpy().squeeze()] + [yi[idx,].numpy().squeeze() for yi in y] + [
-                        x[idx,].numpy().squeeze()] + [pc[idx,].detach().cpu().numpy().squeeze() for pc in
-                                                      lossd['pred'].values()])
-                gridshow('Display', imgs,
-                         [(xc.min().item(), xc.max().item()), (0.0, 1.0), (0.0, 1.0), (-1.0, 1.0),
-                          (0.0, 1.0)] * 2 * n_img,
-                         [cv2.COLORMAP_BONE] * 10 * n_img, 10)
-                cv2.waitKey(2)
-
-    results['loss'] /= batch_idx
-    for l in results['losses']:
-        results['losses'][l] /= batch_idx
-
+    iterator = iter(train_data)
+    for batch_idx in range(batches_per_epoch):
+        try:
+            raw = next(iterator)
+        except StopIteration:
+            iterator = iter(train_data)
+            raw = next(iterator)
+        batch = prepare_batch(raw, device)
+        # Warmup is defined over actual optimizer updates, including across epochs.
+        step = epoch * batches_per_epoch + batch_idx + 1
+        if step <= 500:
+            for group in optimizer.param_groups:
+                group['lr'] = args.lr * step / 500
+        optimizer.zero_grad(set_to_none=True)
+        lossd = batch_loss(net, batch)
+        loss = lossd['loss']
+        if not torch.isfinite(loss):
+            raise FloatingPointError('Non-finite training loss')
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+        optimizer.step()
+        if vis:
+            show_training_batch(batch, lossd['pred'])
+        results['loss'] += loss.item()
+        for name, value in lossd['losses'].items():
+            results['losses'][name] = results['losses'].get(name, 0) + value.item()
+        if (batch_idx + 1) % 100 == 0:
+            logging.info('Epoch %d, update %d, loss %.4f', epoch, batch_idx + 1, loss.item())
+    results['loss'] /= batches_per_epoch
+    results['losses'] = {k: v / batches_per_epoch for k, v in results['losses'].items()}
     return results
+
 
 def run():
     args = parse_args()
+    random.seed(args.random_seed)
+    np.random.seed(args.random_seed)
+    torch.manual_seed(args.random_seed)
 
     # wandb.init(
     #     # set the wandb project where this run will be logged
@@ -290,51 +296,66 @@ def run():
     # Load Dataset
     logging.info('Loading {} Dataset...'.format(args.dataset.title()))
     Dataset = get_dataset(args.dataset)
-    dataset = Dataset(args.dataset_path,
-                      output_size=args.input_size,
-                      ds_rotate=args.ds_rotate,
-                      random_rotate=True,
-                      random_zoom=True,
-                      include_depth=args.use_depth,
-                      include_rgb=args.use_rgb,
-                      seen=args.seen,
-                      add_file_path=args.add_file_path)
-    logging.info('Dataset size is {}'.format(dataset.length))
+    if args.dataset == 'grasp-anything-language':
+        from utils.data.grasp_anything_language_data import language_collate
+        options = dict(output_size=args.input_size, segmentation=args.segmentation,
+                       mask_target=args.mask_target, normalization=args.normalization)
+        dataset = Dataset(args.dataset_path, split='train', **options)
+        validation_dataset = Dataset(args.dataset_path, split='val', **options)
+        train_data = torch.utils.data.DataLoader(
+            dataset, batch_size=args.batch_size, shuffle=True,
+            num_workers=args.num_workers, collate_fn=language_collate)
+        val_data = torch.utils.data.DataLoader(
+            validation_dataset, batch_size=args.batch_size, shuffle=False,
+            num_workers=args.num_workers, collate_fn=language_collate)
+    else:
+        dataset = Dataset(args.dataset_path,
+                          output_size=args.input_size,
+                          ds_rotate=args.ds_rotate,
+                          random_rotate=True,
+                          random_zoom=True,
+                          include_depth=args.use_depth,
+                          include_rgb=args.use_rgb,
+                          seen=args.seen,
+                          add_file_path=args.add_file_path)
+        logging.info('Dataset size is {}'.format(dataset.length))
 
-    # Creating data indices for training and validation splits
-    indices = list(range(dataset.length))
-    split = int(np.floor(args.split * dataset.length))
-    if args.ds_shuffle:
-        np.random.seed(args.random_seed)
-        np.random.shuffle(indices)
-    train_indices, val_indices = indices[:split], indices[split:]
-    logging.info('Training size: {}'.format(len(train_indices)))
-    logging.info('Validation size: {}'.format(len(val_indices)))
+        # Creating data indices for training and validation splits
+        indices = list(range(dataset.length))
+        split = int(np.floor(args.split * dataset.length))
+        if args.ds_shuffle:
+            np.random.seed(args.random_seed)
+            np.random.shuffle(indices)
+        train_indices, val_indices = indices[:split], indices[split:]
+        logging.info('Training size: {}'.format(len(train_indices)))
+        logging.info('Validation size: {}'.format(len(val_indices)))
 
-    # Creating data samplers and loaders
-    train_sampler = torch.utils.data.sampler.SubsetRandomSampler(train_indices)
-    val_sampler = torch.utils.data.sampler.SubsetRandomSampler(val_indices)
+        # Creating data samplers and loaders
+        train_sampler = torch.utils.data.sampler.SubsetRandomSampler(train_indices)
+        val_sampler = torch.utils.data.sampler.SubsetRandomSampler(val_indices)
 
-    train_data = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        sampler=train_sampler,
-        pin_memory=True
-    )
-    val_data = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=1,
-        num_workers=args.num_workers,
-        sampler=val_sampler,
-        pin_memory=True
-    )
+        train_data = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            sampler=train_sampler,
+            pin_memory=True
+        )
+        val_data = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=1,
+            num_workers=args.num_workers,
+            sampler=val_sampler,
+            pin_memory=True
+        )
     logging.info('Done')
 
     # Load the network
     logging.info('Loading Network...')
     network = get_network(args.network)
-    net = network(input_size=args.input_size)
+    net = network(input_size=args.input_size, segmentation=args.segmentation,
+                  lambda_seg=args.lambda_seg, lambda_dice=args.lambda_dice,
+                  grasp_loss=args.grasp_loss)
 
     net = net.to(device)
     logging.info('Done')
@@ -348,7 +369,7 @@ def run():
 
    # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=5, verbose=True
+        optimizer, mode='max', factor=0.5, patience=5
     )
 
     best_iou = 0.0
@@ -363,9 +384,9 @@ def run():
             tb.add_scalar('train_loss/' + n, l, epoch)
             
         # Log training losses to wandb
-        wandb.log({'epoch': epoch, 'train_loss': train_results['loss']})
-        for n, l in train_results['losses'].items():
-            wandb.log({f'train_loss/{n}': l, 'epoch': epoch})
+        if wandb.run is not None:
+            wandb.log({'epoch': epoch, 'train_loss': train_results['loss'],
+                       **{f'train_loss/{k}': v for k, v in train_results['losses'].items()}})
         
         # Run Validation
         logging.info('Validating...')
@@ -383,6 +404,10 @@ def run():
         # wandb.log({'epoch': epoch, 'IOU': test_results['correct'] / (test_results['correct'] + test_results['failed']), 'val_loss': test_results['loss']})
         # for n, l in test_results['losses'].items():
         #     wandb.log({f'val_loss/{n}': l, 'epoch': epoch})
+
+        for metric in ('mask_iou', 'mask_dice'):
+            if metric in test_results:
+                tb.add_scalar('validation/' + metric, test_results[metric], epoch)
 
         # Save best performing network
         iou = test_results['correct'] / (test_results['correct'] + test_results['failed'])

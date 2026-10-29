@@ -1,0 +1,6 @@
+# OPTIONAL fallback profile, Linux NVIDIA GPU, Python 3.10-3.12.
+# Do not apply blindly to a working Colab/Kaggle GPU runtime.
+# After changing torch, restart kernel and REBUILD both CUDA extensions.
+--index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+torchvision==0.21.0

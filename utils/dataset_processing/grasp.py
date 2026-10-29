@@ -175,7 +175,7 @@ class GraspRectangles:
         return grs
 
     @classmethod
-    def load_from_grasp_anything_file(cls, fname, scale=1.0):
+    def load_from_grasp_anything_file(cls, fname, scale=1.0, indices=None):
         """
         Load grasp rectangles from a Grasp-Anything dataset grasp file.
         :param fname: Path to text file.
@@ -183,7 +183,9 @@ class GraspRectangles:
         """
         grs = None
         with open(fname, 'rb') as f:
-            pos_grasps = torch.load(f)
+            pos_grasps = torch.load(f, map_location='cpu', weights_only=True)
+        if indices is not None:
+            pos_grasps = pos_grasps[indices]
         # add_fn = fname.replace("positive_grasp", "negative_grasp")
         # with open(fname, 'rb') as f:
         #     neg_grasps = torch.load(f)

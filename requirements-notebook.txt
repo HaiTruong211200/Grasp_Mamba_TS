@@ -1,0 +1,5 @@
+# Colab/Kaggle already provide the notebook server.
+-r requirements.txt
+ipykernel>=6.29,<7
+ipywidgets>=8.1,<9
+nbformat>=5.10,<6

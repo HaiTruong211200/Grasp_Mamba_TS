@@ -1,0 +1,25 @@
+# Active GraspMamba + manifest/segmentation training path.
+# Install CUDA-enabled torch + matching torchvision BEFORE this file.
+# Colab/Kaggle: keep their matched torch/torchvision initially.
+# This is a compatibility profile, not a GPU-validated lockfile.
+numpy>=1.26.4,<3
+scipy>=1.11.4,<2
+matplotlib>=3.8,<4
+Pillow>=10.4,<13
+opencv-python-headless>=4.10,<5
+scikit-image>=0.23,<1
+imageio>=2.34,<3
+tqdm>=4.66,<5
+tensorboardX>=2.6.2,<3
+wandb>=0.17,<1
+transformers==4.44.2
+timm==0.9.16
+huggingface-hub>=0.23.2,<1
+safetensors>=0.4.3,<1
+sentencepiece>=0.2,<0.3
+protobuf>=4.25,<6
+einops>=0.7,<0.9
+packaging>=23,<26
+ninja>=1.11,<2
+setuptools>=68,<81
+wheel>=0.41,<0.46

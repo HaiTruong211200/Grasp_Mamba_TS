@@ -1,4 +1,7 @@
 def get_dataset(dataset_name):
+    if dataset_name == 'grasp-anything-language':
+        from .grasp_anything_language_data import GraspAnythingLanguageDataset
+        return GraspAnythingLanguageDataset
     if dataset_name == 'cornell':
         from .cornell_data import CornellDataset
         return CornellDataset
