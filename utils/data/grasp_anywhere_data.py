@@ -12,17 +12,29 @@ from utils.dataset_processing import grasp, image, mask
 from .language_grasp_data import LanguageGraspDatasetBase
 
 
+def _rotate_part_mask(target, rot):
+    """Exact fast path for the original square-image quarter-turn augmentation."""
+    turns = rot / (np.pi / 2)
+    quarter = round(turns)
+    if target.shape[0] == target.shape[1] and abs(turns - quarter) < 1e-8:
+        return np.rot90(target, k=quarter)
+    return rotate(target, rot / np.pi * 180, order=0,
+                  mode='symmetric', preserve_range=True)
+
+
 class GraspAnywhereDataset(LanguageGraspDatasetBase):
     """
     Dataset wrapper for the Grasp-Anything dataset.
     """
 
-    def __init__(self, file_path, ds_rotate=0, text_source='object', segmentation=False, **kwargs):
+    def __init__(self, file_path, ds_rotate=0, text_source='object', segmentation=False, eval_split=None, **kwargs):
         """
         :param file_path: Grasp-Anything Dataset directory.
         :param ds_rotate: If splitting the dataset, rotate the list of items by this fraction first
         :param kwargs: kwargs for GraspDatasetBase
         """
+        if eval_split not in (None, 'test_seen', 'test_unseen'):
+            raise ValueError('eval_split must be test_seen or test_unseen')
         if text_source not in ('object', 'instruction'):
             raise ValueError('text_source must be object or instruction')
         self.text_source = text_source
@@ -42,7 +54,12 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         self.rgb_dir = os.path.join(file_path, 'image')
         self.mask_files = glob.glob(os.path.join(file_path, 'mask', '*.npy'))
 
-        if kwargs["seen"]:
+        if eval_split is not None:
+            split_name = 'seen.obj' if eval_split == 'test_seen' else 'unseen.obj'
+            with open(os.path.join('split/grasp-anything++/test', split_name), 'rb') as f:
+                idxs = pickle.load(f)
+            self.grasp_files = list(filter(lambda x: x.split('/')[-1][:-5] in idxs, self.grasp_files))
+        elif kwargs["seen"]:
             with open(os.path.join('split/grasp-anything++/train/seen.obj'), 'rb') as f:
                 idxs = pickle.load(f)
             self.grasp_files = list(filter(lambda x: x.split('/')[-1][:-5] in idxs, self.grasp_files))
@@ -167,8 +184,7 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         with PILImage.open(os.path.join(self.rgb_dir, scene + '.jpg')) as rgb:
             if target.shape != (rgb.height, rgb.width):
                 raise ValueError(f'Part mask and RGB dimensions differ: {path}')
-        target = rotate(target.astype(np.float32), rot / np.pi * 180,
-                        order=0, mode='symmetric', preserve_range=True)
+        target = _rotate_part_mask(target.astype(np.float32), rot)
         original_shape = target.shape
         sr = int(target.shape[0] * (1 - zoom)) // 2
         sc = int(target.shape[1] * (1 - zoom)) // 2

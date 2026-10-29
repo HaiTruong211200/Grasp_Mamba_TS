@@ -113,3 +113,66 @@ earlier epoch. Replaced checkpoints from this run are removed after a successful
 new save. A failed write preserves the previous checkpoints. Filenames contain
 the epoch and IoU and use .pt; checkpoint contents remain plain state_dict.
 Scheduler, validation and training calculations are unchanged.
+
+## Diagnose training time
+
+`tools/profile_training.py` compares a few baseline/segmentation batches and
+reports data wait, host-to-GPU transfer, forward/loss, scalar logging,
+backward/clipping, optimizer and total milliseconds, plus peak GPU memory.
+Stop the training cell first. Pass the same paths, batch size, workers and
+pretrained locations as the real run. It profiles a newly loaded model without
+saving checkpoints. CUDA synchronization adds instrumentation overhead; compare
+stage proportions and baseline/segmentation ratios, not only absolute timing.
+Use --data-only to measure data loading without weights/CUDA.
+
+Local CPU measurements on eight extracted samples showed about 116 ms/sample
+without masks vs 147 ms/sample with masks, not an 8x difference. Mask rotation
+accounted for about 21 ms of a 34 ms mask call. The square-image quarter-turn
+path now uses np.rot90, checked pixel-for-pixel against the previous transform.
+Other angles/rectangular inputs keep the original implementation. No baseline
+RGB/grasp augmentation, train loop, loss weights or evaluation rules changed.
+The reported 10-to-80 minute Kaggle slowdown still requires runtime measurements
+to distinguish data starvation, GPU compute/memory or a changed environment.
+
+## Explicit official seen/unseen test splits
+
+`evaluate_test.py --eval-split test_seen` selects the IDs from
+`split/grasp-anything++/test/seen.obj`. Use --eval-split test_unseen for the
+matching official unseen file. An explicit eval-split overrides legacy --seen.
+Without the new flag, legacy --seen 1 still selects train/seen.obj and --seen 0
+selects test/unseen.obj. Training passes no eval-split, so train/validation
+selection and all optimization behavior remain unchanged. Evaluation continues
+to use the original five grasp candidates, angle gate and IoU threshold.
+
+## Test all retained checkpoints
+
+`evaluate_checkpoints.py --checkpoint-dir <run-folder> --dataset-path <base>
+--add-file-path <plus> --output-dir <writable-output>` evaluates every retained
+checkpoint on both official test_seen and test_unseen. It accepts both current
+.pt filenames and legacy extensionless epoch_*_iou_* files. Model and loader
+are reused across checkpoints of the same type. Segmentation is detected from
+state_dict keys; no SEG_FLAG is needed. Pretrained IDs/paths, text source, input
+size and loss weights default to commandline_args.json when available and can
+be overridden explicitly. The raw state_dict is loaded strictly on the matching
+architecture. The original evaluator's five-grasp, angle and IoU protocol is
+reused; training/checkpoint retention is not modified.
+
+Outputs checkpoint_results.csv and checkpoint_results.json include validation
+accuracy parsed from filename, seen/unseen correct/total/accuracy and harmonic
+mean H=2*S*U/(S+U). CSV accuracy columns are percentages; JSON accuracy fields
+are fractions. Every row is evaluated; test scores do not determine checkpoint
+selection/order. Results are written after each completed checkpoint so earlier
+rows survive an interrupted run. A partial JSON has complete=false. Default
+output directory is evaluation_results/<run-folder-name> under the current
+working directory; --output-dir overrides it. This evaluator needs the current
+loader/evaluate_test.py with explicit official split selection.
+
+## Automatic checkpoint folder selection
+
+Use --logs-dir <repo>/logs instead of --checkpoint-dir. The evaluator scans
+completed epoch_*_iou_* checkpoint files and chooses the parent folder of the
+most recently written one, independent of the run's name or date format.
+Temporary checkpoints and folders with only logs are ignored. It prints the
+selected folder and reads its commandline_args.json as before. Without an
+explicit --output-dir, CSV/JSON go to evaluation_results/<selected-run-name>.
+An explicit --checkpoint-dir remains available to select a particular run.

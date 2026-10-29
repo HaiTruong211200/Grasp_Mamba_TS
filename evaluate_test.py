@@ -41,7 +41,11 @@ def parse_args():
     parser.add_argument('--segmentation', action='store_true', help='Add part-mask auxiliary loss on grasp-anywhere')
     parser.add_argument('--lambda-seg', type=float, default=0.5)
     parser.add_argument('--lambda-dice', type=float, default=1.0)
+    parser.add_argument('--eval-split', choices=['test_seen', 'test_unseen'], default=None,
+                        help='Explicit official ++ test split; overrides legacy --seen selection')
     args = parser.parse_args()
+    if args.eval_split is not None and args.dataset != 'grasp-anywhere':
+        parser.error('--eval-split requires --dataset grasp-anywhere')
     if args.segmentation and args.dataset != 'grasp-anywhere':
         parser.error('--segmentation requires --dataset grasp-anywhere and part_mask/')
     if args.text_source == 'instruction' and args.dataset != 'grasp-anywhere':
@@ -119,6 +123,9 @@ def run():
     logging.info('Loading {} Dataset...'.format(args.dataset.title()))
     Dataset = get_dataset(args.dataset)
     text_options = {'text_source': args.text_source, 'segmentation': args.segmentation} if args.dataset == 'grasp-anywhere' else {}
+    if args.eval_split is not None:
+        text_options['eval_split'] = args.eval_split
+    logging.info('Evaluation split: %s', args.eval_split or ('train_seen' if args.seen else 'test_unseen'))
     logging.info('Text source: %s', args.text_source)
     dataset = Dataset(args.dataset_path,
                       output_size=args.input_size,
