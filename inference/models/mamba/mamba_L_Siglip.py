@@ -84,7 +84,9 @@ class GraspMamba(nn.Module):
     GraspMamba,
     """
 
-    def __init__(self, resolution=416, segmentation=False):
+    def __init__(self, resolution=416, segmentation=False,
+                 vision_model="nvidia/MambaVision-L-1K",
+                 text_model="google/siglip-base-patch16-224"):
         """
         Args:
             resolution: input resolution.
@@ -98,13 +100,13 @@ class GraspMamba(nn.Module):
         assert self.new_spatial_dim ** 2 == self.num_query, "num_query must be a perfect square"
 
          # Replace CLIP text encoder with SigLIP text encoder
-        self.siglip_model = AutoModel.from_pretrained("google/siglip-base-patch16-224")
-        self.siglip_processor = AutoProcessor.from_pretrained("google/siglip-base-patch16-224")
+        self.siglip_model = AutoModel.from_pretrained(text_model)
+        self.siglip_processor = AutoProcessor.from_pretrained(text_model)
         self.siglip_model.eval()
         for param in self.siglip_model.parameters():
             param.requires_grad = False
         
-        self.model = AutoModel.from_pretrained("nvidia/MambaVision-L-1K", trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(vision_model, trust_remote_code=True)
         # Freeze or fine-tuning
         self.model.train()
         # self.model.cuda().eval()

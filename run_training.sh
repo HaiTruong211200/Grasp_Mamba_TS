@@ -8,6 +8,8 @@ cd "$ROOT"
 # Edit defaults here, set environment variables, or pass CLI flags from a notebook.
 # Explicit flags in "$@" are appended last and override the defaults below.
 NETWORK="${NETWORK:-graspmamba}"
+VISION_MODEL="${VISION_MODEL:-nvidia/MambaVision-L-1K}"
+TEXT_MODEL="${TEXT_MODEL:-google/siglip-base-patch16-224}"
 INPUT_SIZE="${INPUT_SIZE:-224}"
 USE_DEPTH="${USE_DEPTH:-0}"
 USE_RGB="${USE_RGB:-1}"
@@ -42,6 +44,8 @@ export USE_FLAX="${USE_FLAX:-0}"
 # Array preserves arguments containing spaces (dataset/log paths, descriptions).
 options=(
     --network "$NETWORK"
+    --vision-model "$VISION_MODEL"
+    --text-model "$TEXT_MODEL"
     --input-size "$INPUT_SIZE"
     --use-depth "$USE_DEPTH"
     --use-rgb "$USE_RGB"
@@ -73,4 +77,4 @@ options=(
 [[ "$FORCE_CPU" == "1" ]] && options+=(--cpu)
 
 # Add --segmentation for the auxiliary branch; omit it for the baseline.
-exec "${PYTHON_BIN:-python3}" "$ROOT/train_network.py" "${options[@]}" "$@"
+exec "${PYTHON_BIN:-python3}" -u "$ROOT/train_network.py" "${options[@]}" "$@"

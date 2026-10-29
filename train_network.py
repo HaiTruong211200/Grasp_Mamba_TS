@@ -32,6 +32,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train network')
 
     # Network
+    parser.add_argument('--vision-model', default='nvidia/MambaVision-L-1K',
+                        help='MambaVision-L Hugging Face ID or local pretrained directory')
+    parser.add_argument('--text-model', default='google/siglip-base-patch16-224',
+                        help='SigLIP Hugging Face ID or local model and processor directory')
     parser.add_argument('--network', type=str, default='graspmamba',
                         help='Network name in inference/models')
     parser.add_argument('--input-size', type=int, default=224,
@@ -200,7 +204,9 @@ def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vi
     results = {'loss': 0, 'losses': {}}
     net.train()
     iterator = iter(train_data)
-    for batch_idx in range(batches_per_epoch):
+    progress = tqdm(range(batches_per_epoch), desc=f"Epoch {epoch + 1}",
+                    unit="batch", dynamic_ncols=True, file=sys.stdout)
+    for batch_idx in progress:
         try:
             raw = next(iterator)
         except StopIteration:
@@ -225,6 +231,9 @@ def train(epoch, net, device, train_data, optimizer, batches_per_epoch, args, vi
         results['loss'] += loss.item()
         for name, value in lossd['losses'].items():
             results['losses'][name] = results['losses'].get(name, 0) + value.item()
+        progress.set_postfix(loss=f'{loss.item():.4f}',
+                             avg_loss=f"{results['loss'] / (batch_idx + 1):.4f}",
+                             refresh=False)
         if (batch_idx + 1) % 100 == 0:
             logging.info('Epoch %d, update %d, loss %.4f', epoch, batch_idx + 1, loss.item())
     results['loss'] /= batches_per_epoch
@@ -355,7 +364,8 @@ def run():
     network = get_network(args.network)
     net = network(input_size=args.input_size, segmentation=args.segmentation,
                   lambda_seg=args.lambda_seg, lambda_dice=args.lambda_dice,
-                  grasp_loss=args.grasp_loss)
+                  grasp_loss=args.grasp_loss,
+                  vision_model=args.vision_model, text_model=args.text_model)
 
     net = net.to(device)
     logging.info('Done')

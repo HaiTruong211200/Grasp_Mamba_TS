@@ -10,14 +10,17 @@ from inference.models.segmentation import segmentation_loss
 
 class Grasp_Mamba(nn.Module):
     def __init__(self, input_size=224, segmentation=False, lambda_seg=0.5,
-                 lambda_dice=1.0, grasp_loss='mse'):
+                 lambda_dice=1.0, grasp_loss='mse',
+                 vision_model='nvidia/MambaVision-L-1K',
+                 text_model='google/siglip-base-patch16-224'):
         super().__init__()
         if any(not math.isfinite(v) or v < 0 for v in (lambda_seg, lambda_dice)):
             raise ValueError('Segmentation weights must be finite and nonnegative')
         if grasp_loss not in ('mse', 'smooth_l1'):
             raise ValueError('grasp_loss must be mse or smooth_l1')
         from inference.models.mamba.mamba_L_Siglip import GraspMamba
-        self.grasp_mamba = GraspMamba(resolution=input_size, segmentation=segmentation)
+        self.grasp_mamba = GraspMamba(resolution=input_size, segmentation=segmentation,
+                                      vision_model=vision_model, text_model=text_model)
         self.segmentation = segmentation
         self.lambda_seg = lambda_seg
         self.lambda_dice = lambda_dice

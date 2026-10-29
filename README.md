@@ -110,3 +110,26 @@ The setup installs the existing requirements and verifies the CUDA extension.
 Pretrained models download automatically when the original model is constructed.
 A working GPU environment still needs to be verified locally; 8 GB VRAM does not
 guarantee every training configuration fits. The run script defaults to batch 1.
+
+## Select local pretrained directories
+
+`run_training.sh`, `train_network.py` and `evaluate_manifest.py` accept
+`--vision-model` and `--text-model`. Each value may be a Hugging Face model ID
+or a local directory accepted by `from_pretrained`. Defaults remain
+`nvidia/MambaVision-L-1K` and `google/siglip-base-patch16-224`.
+
+```python
+VISION_MODEL = "/kaggle/input/your-pretrained-dataset/mambavision-l"
+TEXT_MODEL = "/kaggle/input/your-pretrained-dataset/siglip-base-patch16-224"
+!MPLBACKEND=Agg bash run_training.sh --vision-model "{VISION_MODEL}" --text-model "{TEXT_MODEL}"
+```
+
+Replace these example paths with the actual model directories. Point to a
+complete snapshot containing config.json and weight files, not a single
+.safetensors file or the outer Hugging Face cache directory. For a cached
+snapshot, use `models--.../snapshots/<revision>/`. The MambaVision directory
+also needs its custom Python files; the SigLIP directory needs the processor
+and tokenizer files, since both the text model and processor use --text-model.
+Preserve downloaded files when uploading to Kaggle, including symlink targets.
+Use the same L/SigLIP variants: the fusion channels still expect those models.
+No pretrained downloads were performed while adding these options.

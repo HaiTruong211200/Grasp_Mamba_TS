@@ -17,6 +17,10 @@ def main():
     parser.add_argument('--model-path', type=Path, required=True)
     parser.add_argument('--eval-split', choices=['all', 'val', 'test_seen', 'test_unseen'], default='all')
     parser.add_argument('--mask-target', choices=['part', 'object'], default='part')
+    parser.add_argument('--vision-model', default='nvidia/MambaVision-L-1K',
+                        help='MambaVision-L Hugging Face ID or local pretrained directory')
+    parser.add_argument('--text-model', default='google/siglip-base-patch16-224',
+                        help='SigLIP Hugging Face ID or local model and processor directory')
     parser.add_argument('--input-size', type=int, default=224)
     parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--num-workers', type=int, default=0)
@@ -33,7 +37,8 @@ def main():
     segmentation = any(k.startswith('grasp_mamba.seg_head.') for k in state)
     net = Grasp_Mamba(input_size=args.input_size, segmentation=segmentation,
                       lambda_seg=args.lambda_seg, lambda_dice=args.lambda_dice,
-                      grasp_loss=args.grasp_loss)
+                      grasp_loss=args.grasp_loss,
+                      vision_model=args.vision_model, text_model=args.text_model)
     net.load_state_dict(state, strict=True)
     net.to(device)
     results = {}
