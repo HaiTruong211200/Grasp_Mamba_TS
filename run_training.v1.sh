@@ -67,4 +67,4 @@ if [ ${FORCE_CPU} -eq 1 ]; then
     options+=" --cpu"
 fi
 
-python3 train_network.py $options
+python3 train_network.py $options "$@"

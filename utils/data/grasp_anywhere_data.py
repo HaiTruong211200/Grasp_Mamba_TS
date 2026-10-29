@@ -14,12 +14,15 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
     Dataset wrapper for the Grasp-Anything dataset.
     """
 
-    def __init__(self, file_path, ds_rotate=0, **kwargs):
+    def __init__(self, file_path, ds_rotate=0, text_source='object', **kwargs):
         """
         :param file_path: Grasp-Anything Dataset directory.
         :param ds_rotate: If splitting the dataset, rotate the list of items by this fraction first
         :param kwargs: kwargs for GraspDatasetBase
         """
+        if text_source not in ('object', 'instruction'):
+            raise ValueError('text_source must be object or instruction')
+        self.text_source = text_source
         super(GraspAnywhereDataset, self).__init__(**kwargs)
 
         addition_file_path = kwargs["add_file_path"]
@@ -35,12 +38,12 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         if kwargs["seen"]:
             with open(os.path.join('split/grasp-anything++/train/seen.obj'), 'rb') as f:
                 idxs = pickle.load(f)
-            self.grasp_files = list(filter(lambda x: os.path.basename(x).rsplit('_', 1)[0] in idxs, self.grasp_files))
+            self.grasp_files = list(filter(lambda x: x.split('/')[-1][:-5] in idxs, self.grasp_files))
         else:
             with open(os.path.join('split/grasp-anything++/test/unseen.obj'), 'rb') as f:
                 idxs = pickle.load(f)
 
-            self.grasp_files = list(filter(lambda x: os.path.basename(x).rsplit('_', 1)[0] in idxs, self.grasp_files))
+            self.grasp_files = list(filter(lambda x: x.split('/')[-1][:-5] in idxs, self.grasp_files))
 
 
         self.grasp_files.sort()
@@ -94,8 +97,8 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
     def get_rgb(self, idx, rot=0, zoom=1.0, normalise=True):
         mask_file = self.grasp_files[idx].replace("grasp_label_positive", "mask").replace(".pt", ".npy")
         # mask_img = mask.Mask.from_file(mask_file)
-        rgb_file = re.sub(r"_\d+_\d+\.pt", ".jpg", self.grasp_files[idx])
-        rgb_file = os.path.basename(rgb_file)
+        rgb_file = re.sub(r"_\d{1}_\d{1}\.pt", ".jpg", self.grasp_files[idx])
+        rgb_file = rgb_file.split('/')[-1]
         rgb_file = os.path.join(self.rgb_dir, rgb_file)
         rgb_img = image.Image.from_file(rgb_file)
         # rgb_img = image.Image.mask_out_image(rgb_img, mask_img)
@@ -121,7 +124,7 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         # return rgb_img.img
 
     def get_prompts(self, idx):
-        grasp_file = os.path.basename(self.grasp_files[idx])
+        grasp_file = self.grasp_files[idx].split('/')[-1]
         prompt_file, obj_id, part_id = grasp_file.split('_')
         instruction_file = grasp_file.split('.')[0]
         instruction_file += '.pkl'
@@ -131,11 +134,16 @@ class GraspAnywhereDataset(LanguageGraspDatasetBase):
         obj_id = int(obj_id)
         part_id = int(part_id.split('.')[0])
 
+        if self.text_source == 'instruction':
+            with open(instruction_file, 'rb') as f:
+                instruction = pickle.load(f)
+            if not isinstance(instruction, str) or not instruction.strip():
+                raise ValueError(f'Expected a nonempty instruction string: {instruction_file}')
+            return '', instruction
+
         with open(prompt_file, 'rb') as f:
             x = pickle.load(f)
             prompt, queries = x
         
-        # with open(instruction_file, 'rb') as f:
-        #     instruction = pickle.load(f)
 
         return prompt, queries[obj_id]

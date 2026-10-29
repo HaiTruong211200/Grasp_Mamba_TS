@@ -34,7 +34,11 @@ def parse_args():
     parser.add_argument('--model-path', type=str, help='Path to the trained model file')
     parser.add_argument('--cpu', dest='force_cpu', action='store_true', default=False,
                         help='Force code to run in CPU mode')
+    parser.add_argument('--text-source', choices=['object', 'instruction'], default='object',
+                        help='grasp-anywhere text: original object query or detailed part instruction')
     args = parser.parse_args()
+    if args.text_source == 'instruction' and args.dataset != 'grasp-anywhere':
+        parser.error('--text-source instruction requires --dataset grasp-anywhere')
     return args
 
 def validate(net, device, val_data, iou_threshold, plot=False):
@@ -105,6 +109,8 @@ def run():
     # Load Dataset
     logging.info('Loading {} Dataset...'.format(args.dataset.title()))
     Dataset = get_dataset(args.dataset)
+    text_options = {'text_source': args.text_source} if args.dataset == 'grasp-anywhere' else {}
+    logging.info('Text source: %s', args.text_source)
     dataset = Dataset(args.dataset_path,
                       output_size=args.input_size,
                       ds_rotate=0,
@@ -113,7 +119,8 @@ def run():
                       include_depth=args.use_depth,
                       include_rgb=args.use_rgb,
                       seen=args.seen,
-                      add_file_path=args.add_file_path)
+                      add_file_path=args.add_file_path,
+                      **text_options)
     
     val_data = torch.utils.data.DataLoader(
         dataset,
