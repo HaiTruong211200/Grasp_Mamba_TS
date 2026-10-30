@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument('--vision-model', default='nvidia/MambaVision-L-1K',
                         help='Original MambaVision-L pretrained ID or local directory')
     parser.add_argument('--text-model', default='google/siglip-base-patch16-224',
-                        help='Original SigLIP pretrained ID or local model/processor directory')
+                        help='CLIP/SigLIP pretrained ID or local model/processor directory')
     parser.add_argument('--network', type=str, default='graspmamba',
                         help='Network name in inference/models')
     parser.add_argument('--input-size', type=int, default=224,

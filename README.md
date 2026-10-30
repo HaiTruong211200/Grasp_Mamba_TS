@@ -1,5 +1,9 @@
 # GraspMamba: A Mamba-based Language-driven Grasp Detection Framework with Hierarchical Feature Learning
 
+## Lọc và dựng lại dataset từ split
+
+[Quy trình lọc Grasp-Anything++ và lệnh dựng lại từ ZIP](README_DATASET.md).
+
 ### Installation
 Set up the docker environment, build the docker container for the first time:
 ```bash

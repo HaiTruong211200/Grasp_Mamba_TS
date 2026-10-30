@@ -99,13 +99,22 @@ class GraspMamba(nn.Module):
         self.new_spatial_dim = int(math.sqrt(self.num_query))
         assert self.new_spatial_dim ** 2 == self.num_query, "num_query must be a perfect square"
 
-         # Replace CLIP text encoder with SigLIP text encoder
+        # Keep attribute names for existing SigLIP checkpoint compatibility.
         self.siglip_model = AutoModel.from_pretrained(text_model)
         self.siglip_processor = AutoProcessor.from_pretrained(text_model)
         self.siglip_model.to(self.device)
         self.siglip_model.eval()
         for param in self.siglip_model.parameters():
             param.requires_grad = False
+        text_config = self.siglip_model.config
+        if text_config.model_type == "clip":
+            text_dim = text_config.projection_dim
+            self.text_max_length = text_config.text_config.max_position_embeddings
+        elif text_config.model_type == "siglip":
+            text_dim = text_config.text_config.hidden_size
+            self.text_max_length = 64  # Preserve original SigLIP tokenization.
+        else:
+            raise ValueError("--text-model must be a CLIP or SigLIP model")
         
         self.model = AutoModel.from_pretrained(vision_model, trust_remote_code=True)
         # Freeze or fine-tuning
@@ -115,10 +124,10 @@ class GraspMamba(nn.Module):
         #     param.requires_grad = True
 
         # Text-Image Fusion blocks
-        self.fusion_stage4 = TextImageFusionBlock(1568, 768, 512)
-        self.fusion_stage3 = TextImageFusionBlock(784, 768, 384)
-        self.fusion_stage2 = TextImageFusionBlock(392, 768, 192)
-        self.fusion_stage1 = TextImageFusionBlock(196, 768, 96)
+        self.fusion_stage4 = TextImageFusionBlock(1568, text_dim, 512)
+        self.fusion_stage3 = TextImageFusionBlock(784, text_dim, 384)
+        self.fusion_stage2 = TextImageFusionBlock(392, text_dim, 192)
+        self.fusion_stage1 = TextImageFusionBlock(196, text_dim, 96)
         
         # Upscale blocks
         self.upscale3 = UpscaleBlock(512, 384)
@@ -140,13 +149,13 @@ class GraspMamba(nn.Module):
     def forward(self, img, text, return_seg=False):
         if return_seg and self.seg_head is None:
             raise ValueError('Construct with segmentation=True to request mask logits')
-        # Encode text using CLIP
+        # Encode text with the frozen CLIP/SigLIP encoder.
         with torch.no_grad():
             text_inputs = self.siglip_processor(
                 text=text,
                 padding="max_length",
                 truncation=True,
-                max_length=64,
+                max_length=self.text_max_length,
                 return_tensors="pt"
             )
             text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}

@@ -37,6 +37,7 @@ def model_classes():
         def __init__(self):
             super().__init__()
             self.weight=nn.Parameter(torch.ones(1))
+            self.config=types.SimpleNamespace(model_type='siglip', text_config=types.SimpleNamespace(hidden_size=3))
         def get_text_features(self,input_ids):
             return input_ids.float().repeat(1,3)*self.weight
     class Vision(nn.Module):
