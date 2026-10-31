@@ -1,6 +1,6 @@
 # GraspMambaTS: Language-Driven Grasp Detection with Auxiliary Target Segmentation
 
-This is an extension of GraspMamba that jointly learns language-driven grasp prediction and auxiliary target segmentation. Target-mask supervision encourages the shared vision-language features to distinguish the instructed region from surrounding objects. The segmentation branch is used during training and bypassed during grasp inference, preserving the original grasp prediction path.
+This is an extension of [GraspMamba](https://github.com/Eric-nguyen1402/Grasp_Mamba) that jointly learns language-driven grasp prediction and auxiliary target segmentation. Target-mask supervision encourages the shared vision-language features to distinguish the instructed region from surrounding objects. The segmentation branch is used during training and bypassed during grasp inference, preserving the original grasp prediction path.
 
 
 ## Table of contents
@@ -22,18 +22,19 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel packaging ninja
 ```
 
-- Install a matching CUDA-enabled PyTorch and torchvision pair. For a fresh environment using the repository's CUDA 12.4 profile:
+- Install CUDA-enabled PyTorch first (CUDA 12.4 profile):
 
 ```bash
-python -m pip install -r requirements-torch-cu124.txt
+python -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-- Install the Python packages, followed by the CUDA extensions:
+- Install all remaining dependencies from the single requirements file:
 
 ```bash
-python -m pip install -r requirements.txt
-python -m pip install --no-build-isolation --no-deps -r requirements-cuda.txt
+python -m pip install --no-build-isolation -r requirements.txt
 ```
+
+This includes `mamba-ssm==2.2.5` and `causal-conv1d==1.7.0`. PyTorch is installed first because the CUDA extensions need it during installation. Source builds also require a compatible CUDA toolkit (`nvcc`).
 
 ## Datasets
 
@@ -140,7 +141,7 @@ To evaluate retained checkpoints on both seen and unseen test splits:
 
 ## Acknowledgement
 
-This extension builds on GraspMamba, whose codebase is developed based on [LGD](https://github.com/Fsoft-AIC/LGD) and [MambaVision](https://github.com/NVlabs/MambaVision). Please cite the original GraspMamba paper when using this code:
+Our codebase is based on [GraspMamba](https://github.com/Eric-nguyen1402/Grasp_Mamba). We thank the original authors for releasing their code. GraspMamba also builds on [LGD](https://github.com/Fsoft-AIC/LGD) and [MambaVision](https://github.com/NVlabs/MambaVision). Please cite the original GraspMamba paper when using this code:
 
 ```bibtex
 @misc{nguyen2024graspmambamambabasedlanguagedrivengrasp,

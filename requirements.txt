@@ -1,28 +1,15 @@
-# GraspMamba - Python dependencies for training and evaluation.
-# Based on README.md -> docker/dockerfile, with the current CLIP/SigLIP path.
-# Target: Linux/WSL2 + NVIDIA GPU; Python 3.10-3.12.
-# This is a dependency profile, not a GPU-validated lockfile.
-#
-# Installation (run from the repository root, as in README.md):
-#   python3 -m venv .venv
-#   source .venv/bin/activate
+# GraspMambaTS - unified requirements (Linux/WSL2 + NVIDIA GPU, Python 3.10-3.12).
+# Install PyTorch and build utilities BEFORE this file, because CUDA extension
+# metadata/build steps import torch. See the Installation section in README.md.
 #   python -m pip install --upgrade pip setuptools wheel packaging ninja
-#
-# Install a matched CUDA-enabled torch/torchvision pair FIRST.
-# Keep the working pair supplied by Colab/Kaggle. For a fresh environment,
-# requirements-torch-cu124.txt provides the existing optional CUDA 12.4 profile:
-#   python -m pip install -r requirements-torch-cu124.txt
-#
-# Then install Python packages and CUDA extensions in this order:
-#   python -m pip install -r requirements.txt
-#   python -m pip install --no-build-isolation --no-deps -r requirements-cuda.txt
-# requirements-cuda.txt pins causal-conv1d==1.7.0 and mamba-ssm==2.2.5.
-# The CUDA compiler/toolkit must match the selected torch build when compiling.
-#
-# Training (configure dataset/model paths using the existing script arguments):
-#   MPLBACKEND=Agg bash run_training.v1.sh [arguments]
-# PyTorch3D, rendering, robot-control and other Docker utility packages are not
-# required by the current training/evaluation path and are omitted here.
+#   python -m pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+#   python -m pip install --no-build-isolation -r requirements.txt
+# This preserves the previous CUDA 12.4 torch profile; it is not a GPU-tested lockfile.
+
+# CUDA-enabled PyTorch profile
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+torchvision==0.21.0
 
 # Image and dataset processing
 numpy>=1.26.4,<3
@@ -58,7 +45,7 @@ ttach>=0.0.3,<0.1
 validators>=0.22,<1
 nltk>=3.8,<4
 
-# Build dependencies needed BEFORE installing the CUDA extension requirements
+# Build utilities
 packaging>=23,<26
 ninja>=1.11,<2
 setuptools>=68,<81
@@ -66,3 +53,7 @@ wheel>=0.41,<0.46
 # Match Triton to the installed PyTorch; no independent Triton version is pinned.
 # CUDA PyTorch on Linux normally installs its matched Triton dependency.
 triton; sys_platform == "linux"
+
+# CUDA extensions
+causal-conv1d==1.7.0
+mamba-ssm==2.2.5
